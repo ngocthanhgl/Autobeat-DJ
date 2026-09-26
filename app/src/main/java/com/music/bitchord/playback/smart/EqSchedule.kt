@@ -250,30 +250,33 @@ object EqSchedule {
             }
         }
         TransitionType.ECHO_REVERB_OUT -> listOf(
-            // Finetune-overlap: bass out at 0.30 (echo bass is muddy), then a
-            // long mid taper so A dissolves into pure reverb tail by 0.88.
-            // The mid dive starts at 0.70 on the schedule: B's entry band
-            // clears before the echo tail crosses it, and the tail retains
-            // the air while the mud leaves first.
+            // Energy fix P0-1: one deck always holds the bass. A keeps its low
+            // through the entry (0.46, was killed at 0.30) and hands it off in a
+            // ramp 0.54-0.78 while B's low is already up — no more sub-bass hole
+            // at the crossover. Mid taper preserved (dives at 0.70 so the echo
+            // tail keeps the air while the mud leaves first).
             Key(0f, EqGains.UNITY),
             Key(0.22f, EqGains(1f, 1f, 1f)),
-            Key(0.30f, EqGains(0f, 1f, 1f)),
-            Key(0.46f, EqGains(0f, 0.72f, 1f)),
-            Key(0.58f, EqGains(0f, 0.42f, 0.85f)),
-            Key(0.70f, EqGains(0f, 0.18f, 0.62f)),
+            Key(0.46f, EqGains(1f, 1f, 1f)),
+            Key(0.54f, EqGains(0.60f, 0.85f, 1f)),
+            Key(0.66f, EqGains(0.20f, 0.45f, 0.90f)),
+            Key(0.78f, EqGains(0f, 0.22f, 0.68f)),
             Key(0.88f, EqGains(0f, 0.06f, 0.35f)),
             Key(1f, EqGains.SILENT),
         )
         TransitionType.LOOP_CUT_DROP,
         TransitionType.LOOP_ROLL,
         -> listOf(
-            // Full energy to hold tension; all bands cut together before the drop.
-            // The roll extend shares the shape: the release glide is voiced by
-            // the renderer's 2-beat settle, not the table.
+            // Energy fix P0-2: the CUT contract holds outgoing full gain until
+            // the flip (the splice guard + settle own the handoff). A full
+            // SILENT at 0.90 muted A while B's fader was still shut (B opens at
+            // 0.9375) — a ~280 ms dead-air hole, and -14 dB on the ROLL. Keep
+            // the bass through the settle; only the mids/highs yield so B's
+            // entry lands clean.
             Key(0f, EqGains.UNITY),
             Key(0.70f, EqGains(1f, 1f, 1f)),
             Key(0.85f, EqGains(1f, 0.70f, 1f)),
-            Key(0.90f, EqGains.SILENT),
+            Key(0.90f, EqGains(1f, 0.35f, 0.60f)),
             Key(1f, EqGains.SILENT),
         )
         TransitionType.HALF_TIME_BLEND -> {
@@ -415,13 +418,14 @@ object EqSchedule {
             Key(1f, EqGains.UNITY),
         )
         TransitionType.ECHO_REVERB_OUT -> listOf(
-            // Hollow-fix: B low never hits 0 — it dips shallow (0.55) exactly
-            // when A kills its bass at 0.30, then carries the low end while A
-            // dissolves into tail. DJ rule: one deck always holds the bass.
+            // Energy fix P0-1: B low stays high through the handoff (0.80 at
+            // 0.30, was a 0.55 dip) and reaches unity by 0.45, so it overlaps A's
+            // bass ramp instead of both decks sitting low at once. DJ rule: one
+            // deck always holds the bass.
             Key(0f, EqGains(1f, 0f, 0.80f)),
-            Key(0.30f, EqGains(0.55f, 0f, 0.82f)),
-            Key(0.45f, EqGains(0.75f, 0.45f, 1f)),
-            Key(0.58f, EqGains(0.90f, 0.85f, 1f)),
+            Key(0.30f, EqGains(0.80f, 0f, 0.82f)),
+            Key(0.45f, EqGains(1f, 0.45f, 1f)),
+            Key(0.58f, EqGains(1f, 0.85f, 1f)),
             Key(0.68f, EqGains.UNITY),
             Key(1f, EqGains.UNITY),
         )

@@ -732,7 +732,12 @@ private fun heavyClashPlan(
         // Full-audit P1 M4: the dub throw repeats every HALF beat.
         echoPeriodBeats = 0.5,
         reverbFreezeAtSec = HEAVY_CLASH_FREEZE_OFFSET_SEC,
-        incomingStartDelaySec = 4.5,
+        // Energy fix P0-1: B starts its ramp exactly when A's hold ends (both
+        // 3.0 s), so the LOG curves are complementary — (1-x)^2 + rise(x) sums
+        // to ~0.95-1.0 across the whole handoff. The old 4.5 s delay left a
+        // 1.5 s window where A was already fading while B was still silent: a
+        // measured -6 dB crossover valley plus the sub-bass blackout.
+        incomingStartDelaySec = 3.0,
         outgoingHoldSec = 3.0,
         // LOGARITHMIC, not the S-curve: this plan only exists for vocal
         // clashes, and the log's fast early drop clears A's voice before B

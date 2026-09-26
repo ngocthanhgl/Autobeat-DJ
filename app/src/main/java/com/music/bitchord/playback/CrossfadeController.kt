@@ -2443,7 +2443,12 @@ class CrossfadeController(
             brakeDiveFilters.setBackspin(render.backspin)
             if (render.backspin && outProgress >= windowStart) {
                 val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
-                brakeDiveFilters.outgoing(t.coerceIn(0f, 1f))
+                // Energy fix P1-2: real DJs hold the fader through a spin-back —
+                // only the pitch dives. Driving full t stacked a cubic gain decay
+                // (+ rate dive + LP sweep) for ~-34 dB of level collapse over the
+                // window. Cap the brake amount so the reverse chirp/pitch dive
+                // still reads but the level only dips ~30% instead of dying.
+                brakeDiveFilters.outgoing(t * 0.3f)
             } else if (render.brake && outProgress >= windowStart) {
                 val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
                 brakeDiveFilters.outgoing(t * 0.85f)
@@ -2873,10 +2878,25 @@ class CrossfadeController(
         // ARM flags + force choke + live recompute, once per tick, plus the
         // planned overlap so a sung bed can't slip through silent.
         val duck = render.duckAMids || render.forceDuckKeys || liveDuckA > 0.5f || liveDuckLatchedA
-        val delay = render.delayBMids || render.forceDuckKeys || liveDelayB > 0.5f || liveDelayLatchedB
+        // Energy fix P1-1: forceDuckKeys no longer also forces B's delay. On the
+        // flip (LOG) curve, forcing BOTH flags made the decks dip their mids in
+        // the same progress window — combined audible mid bottomed at ~0.40
+        // (≈ -8 dB) around p=0.30. Keeping only A's duck lets B rise on the
+        // non-delay table while A clears the band: A yields, B fills, staggered.
+        // B's volume there is still only ~0.45, so the early rise reads as a
+        // clean handoff, not mud.
+        val delay = render.delayBMids || liveDelayB > 0.5f || liveDelayLatchedB
         val vocalGate = duck || delay || render.vocalOverlap > 0.2
-        val out = EqSchedule.outgoingGains(render.eqType, progress, duck, shortBed, longBed)
-        val into = EqSchedule.incomingGains(render.eqType, progress, delay, longBed)
+        // Energy fix P0-1: voice the schedules off the GATED progress, not the
+        // raw tick. heavyClash holds A and delays B (outgoingHoldSec /
+        // incomingStartDelaySec); on raw progress its EQ handed the bass off at
+        // 0.30 while B was still volume-gated silent — a ~2 s sub-bass blackout
+        // and a -6 dB crossover hole. outProgress/inProgress already track what
+        // the listener actually hears, and equal raw progress for every plan
+        // without a hold/delay (both coerce to identity), so non-gated blends
+        // are byte-identical.
+        val out = EqSchedule.outgoingGains(render.eqType, outProgress, duck, shortBed, longBed)
+        val into = EqSchedule.incomingGains(render.eqType, inProgress, delay, longBed)
         val swapAt = render.eqSwapFireProgress
         val (lowOut, lowIn) = if (swapAt.isFinite()) {
             if (!eqSwapFired && progress >= swapAt) {
@@ -3248,8 +3268,15 @@ class CrossfadeController(
                 // Spec v2 §9a: the outgoing bass hard-cuts below 200 Hz at
                 // the gap (nothing musical lives there anyway), the incoming
                 // bass fades linearly over 2 s — a tilt, not a swap.
-                filters.outgoing(20000f, 200f)
+                // Energy fix P2-1: the outgoing HP was a CONSTANT 200 Hz for
+                // the whole 2-4 s window, so A's bass was removed across the
+                // entire dissolve (and stacked with B's own HP ramp → both
+                // decks thin at once). The cut sits on a silence gap, so confine
+                // it to the final 0.5 s approach — the audible window keeps A's
+                // bass full.
                 val spanSec = render.overlapSeconds.toFloat().coerceAtLeast(1f)
+                val gapApproach = ((progress * spanSec - (spanSec - 0.5f)) / 0.5f).coerceIn(0f, 1f)
+                filters.outgoing(20000f, 20f + 180f * gapApproach)
                 val bassOpen = (progress * spanSec / 2f).coerceIn(0f, 1f)
                 filters.incoming(20000f, 200f * (1f - bassOpen) + 20f * bassOpen)
                 val outWet = if (progress < 0.5f) {
