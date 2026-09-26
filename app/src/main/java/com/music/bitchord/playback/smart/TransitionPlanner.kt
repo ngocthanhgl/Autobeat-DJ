@@ -3540,8 +3540,17 @@ private fun planTransitionInner(
                     ) ?: timedValueNearOrBefore(
                         analysis.downbeats, valley, max(0.75, beat * 2), transitionStart,
                     ) ?: valley
+                    // Energy fix P1-3: the valley that gets pulled into is
+                    // often the buildup ramp right before the peak — which is
+                    // exactly where the listener wants to be. Refuse the
+                    // dodge when it lands before Drop 1 or inside a BUILD.
                     if (snapped > transitionStart + MIN_TRANSITION_OVERLAP_SECONDS &&
-                        mixEnd - snapped <= MAX_DISCARDED_MUSIC_SECONDS
+                        mixEnd - snapped <= MAX_DISCARDED_MUSIC_SECONDS &&
+                        analysis.structureMap.none { s ->
+                            s.type == StructureSectionType.BUILD &&
+                                snapped >= s.start && snapped <= s.end
+                        } &&
+                        (firstDropSec(analysis)?.let { snapped >= it - 1e-6 } ?: true)
                     ) {
                         val delta = mixEnd - snapped
                         mixEnd = snapped

@@ -2199,6 +2199,18 @@ fun mixsetMixOutAnchor(analysis: TrackAnalysis, length: Double, playbackTime: Do
             }
         }
     }
+    // Energy fix P1-3: never exit before Drop 1 or inside a BUILD section.
+    // The doc above says "no drop play-through floor" — that only held while
+    // firstDropSec always resolved; a scoreless drop returning null let
+    // cooldownLanding land on the pre-drop breakdown, so the set cut away
+    // during the buildup and the listener never heard the peak. Floor the
+    // anchor at Drop 1 and lift it out of any BUILD to the section end.
+    if (drop != null && drop.isFinite() && time < drop) {
+        time = drop.coerceIn(0.0, max(0.0, length - 2.0))
+    }
+    analysis.structureMap.firstOrNull {
+        it.type == StructureSectionType.BUILD && time >= it.start && time <= it.end
+    }?.let { time = maxOf(time, it.end).coerceIn(0.0, max(0.0, length - 2.0)) }
     time = pushPastDrop(analysis, time, drop, length)
     logMixsetAnchorOnce(analysis.trackId, "mixset anchor track=${analysis.trackId} type=mixset_peak t=${"%.1f".format(time)} len=${"%.1f".format(length)} entry=${"%.1f".format(entry)} floor=${"%.1f".format(floor)}")
     return MixOutAnchor(time = time, type = "mixset_peak", discardedMusicSeconds = max(0.0, length - time))
@@ -2323,12 +2335,30 @@ fun fallbackMixsetAnchor(analysis: TrackAnalysis, from: Double, to: Double, base
  * only runs for analyses that predate schema 3.
  */
 fun firstDropSec(analysis: TrackAnalysis): Double? {
-    // Full-audit Phase 2: the stored structured drop wins only when it was a
-    // scored detection. Scoreless fallbacks (max-RMS pick, first DROP label)
-    // persist with dropConfidence == null — honoring them here minted phantom
-    // drops; they fall through to the legacy heuristic below instead.
+    // Full-audit Phase 2: the stored structured drop wins when it was a scored
+    // detection. Scoreless fallbacks (max-RMS pick, first DROP label) persist
+    // with dropConfidence == null — honoring them bare minted phantom drops,
+    // so they fall through to the legacy heuristic below instead.
+    //
+    // Energy fix P1-3: discarding them outright left drop == null, which
+    // collapsed Tier 1's floor to entry+phrase, skipped Tier 2 entirely and
+    // no-oped pushPastDrop — so a scoreless drop let the exit land inside the
+    // BUILDUP, before the peak. Accept a scoreless stored drop when the
+    // structure map corroborates it (a BUILD leading in, or a DROP label
+    // there), which is the same evidence a scored detection would have used.
     val stored = analysis.structuredDropSec?.takeIf { it.isFinite() && it >= 0 }
-    if (stored != null && analysis.dropConfidence != null) return stored
+    if (stored != null) {
+        if (analysis.dropConfidence != null) return stored
+        val corroborated = analysis.structureMap.any { label ->
+            when (label.type) {
+                StructureSectionType.DROP ->
+                    kotlin.math.abs(label.start - stored) < 4.0
+                StructureSectionType.BUILD -> stored >= label.start && stored <= label.end + 4.0
+                else -> false
+            }
+        }
+        if (corroborated) return stored
+    }
     val curve = analysis.energyCurve
     if (curve.size < 3) return null
     val mean = meanEnergy(analysis) ?: return null

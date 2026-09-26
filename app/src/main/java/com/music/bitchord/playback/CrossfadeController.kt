@@ -1163,7 +1163,15 @@ class CrossfadeController(
                             transitionEnd = frozenAnchorEndSec,
                         )
                     }
-                } else if (remainingMs in 1..anchorFreezeAheadMs && currentAnalysis.isUsable) {
+                } else if (remainingMs in 1..anchorFreezeAheadMs &&
+                    currentAnalysis.isUsable && !currentAnalysis.provisionalHead
+                ) {
+                    // Energy fix P1-3: a head-only provisional analysis has no
+                    // structure/drop yet, so its plan can sit the exit inside
+                    // the buildup. Once latched, the frozen start/end replayed
+                    // every tick until the playhead passes — never revalidated
+                    // when the whole-track pass lands. Only freeze a plan built
+                    // from a complete analysis.
                     frozenAnchorPair = pairKey
                     frozenAnchorStartSec = plan.transitionStart
                     frozenAnchorEndSec = plan.transitionEnd
