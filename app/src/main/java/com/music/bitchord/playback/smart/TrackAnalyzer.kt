@@ -108,7 +108,59 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
      */
     private val resolver by lazy { context.contentResolver }
 
-    private val results = ConcurrentHashMap<String, TrackAnalysis>()
+    /**
+     * Session cache of measurements, bounded so a long session cannot grow it
+     * without limit. Unbounded, it held every track ever analysed in this
+     * process — each entry carries the whole-track energy curve and masks —
+     * which is what froze the app after hours of playback (P2-2).
+     *
+     * Access-ordered: a read bumps recency, so the tracks actually playing are
+     * the last things that could fall off, while older measurements evict from
+     * the front. All access is under one lock because an access-ordered
+     * [LinkedHashMap] reorders on read; every critical section here is a hash
+     * lookup, so the playback thread never waits behind anything long.
+     *
+     * An evicted track is not lost: the whole-track pass is on disk via
+     * [AnalysisStore], and [pruneTrackState] clears the once-flags so the next
+     * [request] restores it instead of re-measuring it.
+     */
+    private inner class BoundedResults {
+        private val map = LinkedHashMap<String, TrackAnalysis>(64, 0.75f, true)
+
+        @Synchronized
+        operator fun get(trackId: String): TrackAnalysis? = map[trackId]
+
+        @Synchronized
+        operator fun set(trackId: String, analysis: TrackAnalysis) {
+            map[trackId] = analysis
+            evictOverCapacity()
+        }
+
+        @Synchronized
+        fun putIfAbsent(trackId: String, analysis: TrackAnalysis) {
+            if (map[trackId] == null) {
+                map[trackId] = analysis
+                evictOverCapacity()
+            }
+        }
+
+        @Synchronized
+        fun containsKey(trackId: String): Boolean = map.containsKey(trackId)
+
+        @Synchronized
+        fun clear() = map.clear()
+
+        /** Access order walks least-recently-used first, so the head is what goes. */
+        private fun evictOverCapacity() {
+            while (map.size > MAX_CACHED_ANALYSES) {
+                val eldest = map.keys.firstOrNull() ?: break
+                map.remove(eldest)
+                pruneTrackState(eldest)
+            }
+        }
+    }
+
+    private val results = BoundedResults()
     private val running = ConcurrentHashMap.newKeySet<String>()
     private val sourceAnalysisUris = ConcurrentHashMap<String, Uri>()
     private val sourceResolutions = ConcurrentHashMap.newKeySet<String>()
@@ -169,6 +221,34 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
 
     /** Tracks already looked for on disk this session; see [restoreOnce]. */
     private val restoreAttempted = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Drops the per-track bookkeeping when [results] evicts that track, so the
+     * satellite maps cannot outgrow the cache they belong to (P2-2). Only the
+     * track-keyed ones: the rendition-keyed maps ([headAttempts],
+     * [badRenditions], [renditionRejects], …) record per-copy patience that has
+     * to outlive any single cached result, and [running] stays — a job in
+     * flight re-populates the cache when it lands.
+     *
+     * Clearing [restoreAttempted] is the load-bearing part: it is the
+     * once-guard in [restoreOnce], so an evicted track with a saved
+     * whole-track pass is restored from disk on its next [request] rather than
+     * decoded and measured all over again.
+     */
+    private fun pruneTrackState(trackId: String) {
+        restoreAttempted.remove(trackId)
+        sourceAnalysisUris.remove(trackId)
+        sourceResolutions.remove(trackId)
+        sourceResolutionAttempted.remove(trackId)
+        provisional.remove(trackId)
+        shortDecodes.remove(trackId)
+        throwStrikes.remove(trackId)
+        openFailStrikes.remove(trackId)
+        noDurationStrikes.remove(trackId)
+        localReopenTried.remove(trackId)
+        jobStartMs.remove(trackId)
+        stuckLogged.remove(trackId)
+    }
 
     /** Results that survive the process, so a track is measured once and stays measured. */
     private val store = AnalysisStore(context)
@@ -1729,6 +1809,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         highExecutor.shutdownNow()
         lowExecutor.shutdownNow()
         sourceResolutionScope.cancel()
+        results.clear()
         sourceAnalysisUris.clear()
         sourceResolutions.clear()
         sourceResolutionAttempted.clear()
@@ -1746,6 +1827,15 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
 
     companion object {
         const val TAG = "BitChordTrackAnalyzer"
+
+        /**
+         * Cap on in-memory analyses (P2-2). Enough for everything a session is
+         * actively juggling — playing, next, the queue behind them, plus the
+         * recent past — while bounding the long-session growth: measured, a
+         * whole-track analysis runs tens of kilobytes (energy curve, vocal and
+         * pitch masks) and the cache kept every one of them forever.
+         */
+        const val MAX_CACHED_ANALYSES = 64
 
         /** Lane for the track queued to play next. Everything else is 0. */
         const val PRIORITY_NEXT = 1
