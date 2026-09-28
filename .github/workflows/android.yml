@@ -132,6 +132,14 @@ jobs:
         else
           NOTES="Release $TAG (commit ${{ github.sha }})."
         fi
+        for f in dist/*.apk; do
+          case "$(basename "$f")" in
+            *arm64-v8a*)   mv "$f" "dist/Bitchord-DJ-arm64-v8a-release.apk" ;;
+            *armeabi-v7a*) mv "$f" "dist/Bitchord-DJ-armeabi-v7a-release.apk" ;;
+            *) echo "unexpected APK: $f"; exit 1 ;;
+          esac
+        done
+        ls -l dist/
         gh release create "$TAG" dist/*.apk \
           --repo "$REPO" \
           --title "BitChord DJ Mix $TAG" \
