@@ -676,6 +676,15 @@ class PlaybackService : MediaLibraryService() {
     private var lastPublishedSubtitle: String? = null
     private var lyricsTickerJob: Job? = null
 
+    /** Armed only while the player claims STATE_BUFFERING — see the watchdog. */
+    private var bufferingWatchdog: Job? = null
+
+    /** How many times the current watchdog cycle has fired for [bufferingStallMediaId]. */
+    private var bufferingStalls = 0
+
+    /** The track the stall count above belongs to. */
+    private var bufferingStallMediaId: String? = null
+
     /**
      * Everything the service books against the player it is currently on.
      *
@@ -867,6 +876,16 @@ class PlaybackService : MediaLibraryService() {
             // The player this fired on, which is by definition the one the
             // session is currently pointed at.
             val exoPlayer = player ?: return
+            if (state == Player.STATE_BUFFERING) {
+                armBufferingWatchdog(exoPlayer)
+            } else {
+                // Loading claimed to be over, whatever comes next: the stall
+                // only matters while the player is still inside it, and a load
+                // that landed clears the strike the nudge above earned.
+                bufferingWatchdog?.cancel()
+                bufferingWatchdog = null
+                bufferingStalls = 0
+            }
             if (state == Player.STATE_ENDED) {
                 SleepTimer.cancel()
                 // The queue ran dry, so no transition will ever close the last
@@ -1328,11 +1347,23 @@ class PlaybackService : MediaLibraryService() {
                     .setHttpRequestHeaders(headers)
                     .build()
             }
-            val won = runBlocking(about) {
-                resolveWithModulePriority(
-                    videoId = videoId,
-                    target = SourceResolver.targetIn(dataSpec.uri),
-                )
+            // Untimed until now, unlike every sibling above: a fallback leg
+            // that never returns (a client walk held by a stalled socket, a
+            // module that answers only to its own deadline) blocks this
+            // loader thread forever, and a loader thread that never returns
+            // leaves the player in STATE_BUFFERING with no error to raise —
+            // progress bar spinning until the process is killed.
+            val won = try {
+                runBlocking(about) {
+                    withTimeout(RESOLVE_TIMEOUT_MS) {
+                        resolveWithModulePriority(
+                            videoId = videoId,
+                            target = SourceResolver.targetIn(dataSpec.uri),
+                        )
+                    }
+                }
+            } catch (e: TimeoutCancellationException) {
+                throw java.io.IOException("Module priority resolution timed out for $videoId", e)
             }
             when (won) {
                 is Resolved.Module -> {
@@ -2510,7 +2541,20 @@ class PlaybackService : MediaLibraryService() {
                 // the outside that is indistinguishable from a hung app — which
                 // is what the report describes and what "it was stuck on my
                 // phone too" means. Moving on is the only honest answer.
-                skipReason(verdict, error, neverStarted, attempts)?.let { reason ->
+                val reason = skipReason(verdict, error, neverStarted, attempts)
+                    // [skipReason] declines to move the queue for a track that
+                    // already made sound, and declining leaves the player
+                    // parked in IDLE on a dead source with no error on screen —
+                    // the hung-app state this branch exists to prevent. The
+                    // attempts are spent either way; moving on is still the
+                    // only honest answer. (The other null — the consecutive-
+                    // skip floor — means stop, and is left alone.)
+                    ?: if (!neverStarted) {
+                        "gave up on $mediaId after $attempts attempts (${error.errorCodeName})"
+                    } else {
+                        null
+                    }
+                if (reason != null) {
                     withContext(Dispatchers.Main) { skipPastUnplayable(mediaId, reason) }
                 }
                 return@launch
@@ -2662,6 +2706,64 @@ class PlaybackService : MediaLibraryService() {
             }
         }
         return true
+    }
+
+    /**
+     * Start (or restart) the clock on the player's current buffering episode.
+     *
+     * [onPlayerError] is the only thing that ever reaches [recoverFrom], and a
+     * load that never comes back — a resolve hanging under the loader thread,
+     * a googlevideo URL trickling below the read timeout — sits in
+     * STATE_BUFFERING forever with no error behind it. Nothing else bounds
+     * that: the listener watches the spinner until they kill the process,
+     * which is exactly the bug this watchdog exists for.
+     *
+     * First expiry nudges the load (seek to where it already is, prepare);
+     * if the player is still buffering on the same item a watchdog period
+     * later, the nudge bought nothing and the track is skipped the same way
+     * an error would skip it.
+     */
+    private fun armBufferingWatchdog(exoPlayer: ExoPlayer) {
+        bufferingWatchdog?.cancel()
+        val mediaId = exoPlayer.currentMediaItem?.mediaId
+        if (mediaId == null) {
+            bufferingStalls = 0
+            bufferingStallMediaId = null
+            return
+        }
+        if (mediaId != bufferingStallMediaId) {
+            bufferingStallMediaId = mediaId
+            bufferingStalls = 0
+        }
+        bufferingWatchdog = scope.launch { watchBuffering(mediaId) }
+    }
+
+    /** The body of [armBufferingWatchdog]: wait out one still-buffering period. */
+    private suspend fun watchBuffering(mediaId: String) {
+        delay(BUFFERING_WATCHDOG_MS)
+        val player = player ?: return
+        if (player.playbackState != Player.STATE_BUFFERING) return
+        if (player.currentMediaItem?.mediaId != mediaId) return
+        bufferingStalls++
+        if (bufferingStalls == 1) {
+            TrackLog.w(
+                "BitChord",
+                "buffering made no progress for ${BUFFERING_WATCHDOG_MS}ms; re-prepare",
+                about = mediaId,
+            )
+            player.seekTo(player.currentMediaItemIndex, player.currentPosition)
+            player.prepare()
+            bufferingWatchdog = scope.launch { watchBuffering(mediaId) }
+            return
+        }
+        bufferingStalls = 0
+        bufferingStallMediaId = null
+        bufferingWatchdog = null
+        // A paused listener did not ask for this track to move, and a queue
+        // with nowhere to go has nowhere to skip to — same restraint the
+        // error path shows.
+        if (!player.playWhenReady) return
+        skipPastUnplayable(mediaId, "stalled in buffering with no player error")
     }
 
     /**
@@ -3072,10 +3174,21 @@ class PlaybackService : MediaLibraryService() {
      * and quietly keep playing the old stream.
      */
     private suspend fun swapIn(mediaId: String, stream: SourceStream) {
-        if (AppSettings.mixsetModeEnabled.value) return
+        if (AppSettings.mixsetModeEnabled.value) {
+            // Nothing here will ever consume a shelved stream: forget it, or
+            // lookForBetterCopy re-offers the same entry every progress sample.
+            QualityUpgrade.forget(mediaId)
+            return
+        }
         val at = withContext(Dispatchers.Main) { swapPointFor(mediaId) } ?: return
         if (at.duration > 0 && at.duration - at.position < UPGRADE_MIN_REMAINING_MS) {
             TrackLog.d("BitChord", "upgrade abandoned: only ${at.duration - at.position}ms of the track left")
+            // Too late to swap, and the track will never become less late:
+            // without this the shelved entry survives the track, so every
+            // sample for its remaining seconds re-enters here, fails the same
+            // guard, and the entry outlives the queue move that would have
+            // dropped it — the same re-offer loop the guard is meant to end.
+            QualityUpgrade.forget(mediaId)
             return
         }
 
@@ -6263,6 +6376,14 @@ class PlaybackService : MediaLibraryService() {
 
         /** How often played-seconds are sampled off the player. */
         const val PROGRESS_SAMPLE_MS = 5_000L
+
+        /**
+         * How long the player may sit in STATE_BUFFERING without making
+         * progress before the watchdog re-prepares it, and once more before
+         * the track is skipped — the bound on the silent freeze, where no
+         * error ever arrives to run [recoverFrom].
+         */
+        const val BUFFERING_WATCHDOG_MS = 45_000L
 
         /**
          * How long a Discord teardown may spend clearing the presence before the

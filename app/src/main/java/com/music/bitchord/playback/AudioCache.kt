@@ -530,6 +530,13 @@ object AudioCache {
         // typically a good deal closer than googlevideo anyway.
         //
         val videoIds = mediaIds.filter { SourceRegistry.parseTrackKey(it) == null }
+            // A track from the device's own library rides in on its
+            // `content://` media id, which is not a YouTube id in any sense:
+            // handing it to the resolver mints
+            // `watch?v=content://media/…`, and the client walk behind that
+            // answer fails after seconds of extraction for an answer that was
+            // never open. Read-ahead for local files is the file itself.
+            .filter { !it.startsWith("content://") }
             // A track already on disk needs no reading ahead, and read-ahead
             // speaks only to googlevideo: warming one would spend mobile data
             // fetching a second copy of a file the listener deliberately saved,
