@@ -115,11 +115,21 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        TAG="v1.5.2-${{ github.run_number }}"
-        NOTES="Automated prod release (build ${{ github.run_number }}, commit ${{ github.sha }}).
-        DJ Automix: beat-matched blends, isolator bass swap, gain-staged reverb/echo, click-free handoffs."
+        VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
+        TAG="v$VERSION"
         if [ "${{ github.repository }}" != "ngocthanhgl/BitChord-DJ" ]; then REPO="ngocthanhgl/BitChord-DJ"; else REPO="${{ github.repository }}"; fi
+        if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+          gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes
+        fi
+        PREV=$(gh api "repos/$REPO/releases?per_page=1" --jq '.[0].tag_name' 2>/dev/null || true)
+        if [ -n "$PREV" ]; then
+          NOTES=$(gh api "repos/$REPO/compare/$PREV...${{ github.sha }}" --jq '[.commits[] | "- " + (.commit.message | split("\n")[0])] | join("\n")')
+          if [ -z "$NOTES" ]; then NOTES="- Maintenance release."; fi
+          NOTES="What's new in $TAG:"$'\n\n'"$NOTES"
+        else
+          NOTES="Release $TAG (commit ${{ github.sha }})."
+        fi
         gh release create "$TAG" dist/*.apk \
           --repo "$REPO" \
-          --title "BitChord DJ Mix v1.5.2 (build ${{ github.run_number }})" \
+          --title "BitChord DJ Mix $TAG" \
           --notes "$NOTES"
