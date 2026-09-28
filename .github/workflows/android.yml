@@ -105,6 +105,8 @@ jobs:
       contents: write
 
     steps:
+    - uses: actions/checkout@v4
+
     - name: Download APK Artifact
       uses: actions/download-artifact@v4
       with:
@@ -116,6 +118,7 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
+        if [ -z "$VERSION" ]; then echo "versionName not found in app/build.gradle.kts"; exit 1; fi
         TAG="v$VERSION"
         if [ "${{ github.repository }}" != "ngocthanhgl/BitChord-DJ" ]; then REPO="ngocthanhgl/BitChord-DJ"; else REPO="${{ github.repository }}"; fi
         if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
