@@ -656,8 +656,6 @@ object AppSettings {
 
     val discordButton1Text = MutableStateFlow("")
     val discordButton1Visible = MutableStateFlow(true)
-    val discordButton2Text = MutableStateFlow("")
-    val discordButton2Visible = MutableStateFlow(true)
 
     /** The notice about what connecting an account actually does has been read. */
     val discordInfoDismissed = MutableStateFlow(false)
@@ -872,8 +870,6 @@ object AppSettings {
         discordActivityName.value = prefs.getString(KEY_DISCORD_ACTIVITY_NAME, "").orEmpty()
         discordButton1Text.value = prefs.getString(KEY_DISCORD_BUTTON_1_TEXT, "").orEmpty()
         discordButton1Visible.value = prefs.getBoolean(KEY_DISCORD_BUTTON_1_VISIBLE, true)
-        discordButton2Text.value = prefs.getString(KEY_DISCORD_BUTTON_2_TEXT, "").orEmpty()
-        discordButton2Visible.value = prefs.getBoolean(KEY_DISCORD_BUTTON_2_VISIBLE, true)
         discordInfoDismissed.value = prefs.getBoolean(KEY_DISCORD_INFO_DISMISSED, false)
     }
 
@@ -1553,16 +1549,6 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_DISCORD_BUTTON_1_VISIBLE, value).apply()
     }
 
-    fun setDiscordButton2Text(value: String) {
-        discordButton2Text.value = value
-        prefs.edit().putString(KEY_DISCORD_BUTTON_2_TEXT, value).apply()
-    }
-
-    fun setDiscordButton2Visible(value: Boolean) {
-        discordButton2Visible.value = value
-        prefs.edit().putBoolean(KEY_DISCORD_BUTTON_2_VISIBLE, value).apply()
-    }
-
     fun setDiscordInfoDismissed(value: Boolean) {
         discordInfoDismissed.value = value
         prefs.edit().putBoolean(KEY_DISCORD_INFO_DISMISSED, value).apply()
@@ -1872,8 +1858,6 @@ object AppSettings {
     private const val KEY_DISCORD_ACTIVITY_NAME = "discord_activity_name"
     private const val KEY_DISCORD_BUTTON_1_TEXT = "discord_button_1_text"
     private const val KEY_DISCORD_BUTTON_1_VISIBLE = "discord_button_1_visible"
-    private const val KEY_DISCORD_BUTTON_2_TEXT = "discord_button_2_text"
-    private const val KEY_DISCORD_BUTTON_2_VISIBLE = "discord_button_2_visible"
     private const val KEY_DISCORD_INFO_DISMISSED = "discord_info_dismissed"
     private const val KEY_LAST_VERSION_CODE = "last_version_code"
 }

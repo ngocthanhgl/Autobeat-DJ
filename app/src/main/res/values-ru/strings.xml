@@ -283,7 +283,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Аккаунт Discord</string>
     <string name="discord_button_variables">{song_name}, {artist_name} и {album_name} заменяются данными текущего трека.</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name} и {album_name} заменяются данными трека. Первая кнопка открывает песню в YouTube Music, а вторая — этот проект.</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name} и {album_name} заменяются данными трека. Первая кнопка открывает песню в YouTube Music.</string>
     <string name="discord_presence_footer">Карточка обновляется при изменении трека, позиции воспроизведения или его состояния. Она исчезает, когда воспроизведение останавливается.</string>
     <string name="discord_sign_in_footer">Вход открывает страницу входа Discord. В BitChord ничего не вводится.</string>
     <string name="discord_token">Токен Discord</string>
@@ -465,7 +465,6 @@
     <string name="scrobbling_paused_footer">Last.fm и ListenBrainz приостановлены для этого релиза и вернутся позже. Существующие подключения остаются сохранёнными.</string>
     <string name="search_this_folder">Искать в этой папке</string>
     <string name="search_this_list">Искать в этом списке</string>
-    <string name="second_button">Вторая кнопка</string>
     <string name="share">Поделиться</string>
     <string name="sharing_as">Публикация от имени @%1$s</string>
     <string name="sharing_listens">Публикация ваших прослушиваний</string>

@@ -275,7 +275,7 @@
     <string name="discord">דיסקורד</string>
     <string name="discord_account">חשבון דיסקורד</string>
     <string name="discord_button_variables">{song_name}, {artist_name} ו-{album_name} מוחלפים בשיר הנוכחי.</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name} ו-{album_name} מוחלפים בשיר. הכפתור הראשון פותח את השיר ב-YouTube Music והשני פותח פרויקט זה.</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name} ו-{album_name} מוחלפים בשיר. הכפתור הראשון פותח את השיר ב-YouTube Music.</string>
     <string name="discord_presence_footer">הכרטיס מתעדכן כאשר הרצועה, המיקום או מצב ההפעלה משתנים. הוא נמחק כאשר ההפעלה נפסקת.</string>
     <string name="discord_sign_in_footer">הכניסה פותחת את עמוד ההתחברות של דיסקורד. שום דבר אינו מוקלד ב-BitChord.</string>
     <string name="discord_token">אסימון דיסקורד</string>
@@ -412,7 +412,6 @@
     <string name="scrobbling_paused_footer">Last.fm ו-ListenBrainz מושהים בגרסה זו ויחזרו מאוחר יותר. חיבורים קיימים נשארים שמורים.</string>
     <string name="search_this_folder">חפש בתיקייה זו</string>
     <string name="search_this_list">חפש ברשימה זו</string>
-    <string name="second_button">כפתור שני</string>
     <string name="share">שתף</string>
     <string name="sharing_as">משתף כ-@%1$s</string>
     <string name="sharing_listens">משתף את ההאזנות שלך</string>

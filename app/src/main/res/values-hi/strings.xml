@@ -275,7 +275,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Discord खाता</string>
     <string name="discord_button_variables">{song_name}, {artist_name} और {album_name} की जगह मौजूदा ट्रैक की जानकारी आ जाती है।</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name} और {album_name} की जगह ट्रैक की जानकारी आ जाती है। पहला बटन गाने को YouTube Music पर खोलता है और दूसरा इस प्रोजेक्ट को खोलता है।</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name} और {album_name} की जगह ट्रैक की जानकारी आ जाती है। पहला बटन गाने को YouTube Music पर खोलता है।</string>
     <string name="discord_presence_footer">ट्रैक, पोज़िशन या प्लेबैक स्थिति बदलने पर कार्ड अपडेट होता है। प्लेबैक रुकने पर यह साफ़ हो जाता है।</string>
     <string name="discord_sign_in_footer">साइन इन करने पर Discord का लॉगिन पेज खुलता है। BitChord में कुछ भी टाइप नहीं किया जाता।</string>
     <string name="discord_token">Discord टोकन</string>
@@ -448,7 +448,6 @@
     <string name="scrobbling_paused_footer">इस रिलीज़ के लिए Last.fm और ListenBrainz को रोक दिया गया है और वे बाद में वापस आएंगे। मौजूदा कनेक्शन सेव रहेंगे।</string>
     <string name="search_this_folder">इस फ़ोल्डर में खोजें</string>
     <string name="search_this_list">इस लिस्ट में खोजें</string>
-    <string name="second_button">दूसरा बटन</string>
     <string name="share">शेयर करें</string>
     <string name="sharing_as">@%1$s के रूप में शेयर हो रहा है</string>
     <string name="sharing_listens">आपकी सुनी चीज़ें शेयर हो रही हैं</string>

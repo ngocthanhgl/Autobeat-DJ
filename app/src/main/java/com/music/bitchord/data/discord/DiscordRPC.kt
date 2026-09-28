@@ -61,8 +61,6 @@ class DiscordRPC(
         status: String = "online",
         button1Text: String = "",
         button1Visible: Boolean = true,
-        button2Text: String = "",
-        button2Visible: Boolean = true,
         activityType: String = "listening",
         activityName: String = "",
     ) = runCatching {
@@ -87,13 +85,6 @@ class DiscordRPC(
                 song,
             )
             buttonsList.add(resolvedText to watchUrl(song))
-        }
-        if (button2Visible) {
-            val resolvedText = resolveVariables(
-                button2Text.ifEmpty { DEFAULT_BUTTON_2 },
-                song,
-            )
-            buttonsList.add(resolvedText to PROJECT_URL)
         }
 
         val type = when (activityType) {
@@ -162,10 +153,7 @@ class DiscordRPC(
          */
         private const val APPLICATION_ID = "1411019391843172514"
 
-        const val PROJECT_URL = "https://github.com/kushagrasinghx/BitChord"
-
         const val DEFAULT_BUTTON_1 = "Listen on YouTube Music"
-        const val DEFAULT_BUTTON_2 = "Visit BitChord"
 
         /** Discord draws the sleeve at roughly 96dp; 480px covers it on any density. */
         private const val ART_PX = 480

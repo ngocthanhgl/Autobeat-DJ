@@ -271,7 +271,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Discordアカウント</string>
     <string name="discord_button_variables">{song_name}、{artist_name}、{album_name}は現在の曲に置き換えられます。</string>
-    <string name="discord_buttons_footer">{song_name}、{artist_name}、{album_name}は曲の情報に置き換えられます。1つ目のボタンはYouTube Musicで曲を開き、2つ目はこのプロジェクトを開きます。</string>
+    <string name="discord_buttons_footer">{song_name}、{artist_name}、{album_name}は曲の情報に置き換えられます。1つ目のボタンはYouTube Musicで曲を開きます。</string>
     <string name="discord_presence_footer">曲、再生位置、再生状態が変わるとカードが更新されます。再生が止まると消去されます。</string>
     <string name="discord_sign_in_footer">ログインするとDiscordのログインページが開きます。BitChordに何かが入力されることはありません。</string>
     <string name="discord_token">Discordトークン</string>
@@ -435,7 +435,6 @@
     <string name="scrobbling_paused_footer">Last.fmとListenBrainzは今回のリリースでは一時停止しており、後日再開されます。既存の連携は保存されたままです。</string>
     <string name="search_this_folder">このフォルダ内を検索</string>
     <string name="search_this_list">このリスト内を検索</string>
-    <string name="second_button">2つ目のボタン</string>
     <string name="share">共有</string>
     <string name="sharing_as">@%1$sとして共有中</string>
     <string name="sharing_listens">再生履歴を共有中</string>

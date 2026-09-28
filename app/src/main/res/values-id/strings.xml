@@ -271,7 +271,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Akun Discord</string>
     <string name="discord_button_variables">{song_name}, {artist_name}, dan {album_name} akan digantikan dengan trek yang sedang diputar.</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name}, dan {album_name} akan digantikan dengan trek tersebut. Tombol pertama membuka lagu di YouTube Music dan tombol kedua membuka proyek ini.</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name}, dan {album_name} akan digantikan dengan trek tersebut. Tombol pertama membuka lagu di YouTube Music.</string>
     <string name="discord_presence_footer">Kartu diperbarui saat trek, posisi, atau status pemutaran berubah. Kartu akan hilang saat pemutaran berhenti.</string>
     <string name="discord_sign_in_footer">Masuk akan membuka halaman login Discord. Tidak ada yang diketik ke BitChord.</string>
     <string name="discord_token">Token Discord</string>
@@ -435,7 +435,6 @@
     <string name="scrobbling_paused_footer">Last.fm dan ListenBrainz dijeda untuk rilisan ini dan akan kembali nanti. Koneksi yang ada tetap tersimpan.</string>
     <string name="search_this_folder">Cari di folder ini</string>
     <string name="search_this_list">Cari di daftar ini</string>
-    <string name="second_button">Tombol kedua</string>
     <string name="share">Bagikan</string>
     <string name="sharing_as">Berbagi sebagai @%1$s</string>
     <string name="sharing_listens">Membagikan yang Anda dengarkan</string>

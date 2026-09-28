@@ -271,7 +271,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Konto Discord</string>
     <string name="discord_button_variables">{song_name}, {artist_name} i {album_name} są zastępowane obecnym utworem.</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name} i {album_name} są zastępowane utworem. Pierwszy przycisk otwiera utwór w YouTube Music, a drugi otwiera ten projekt.</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name} i {album_name} są zastępowane utworem. Pierwszy przycisk otwiera utwór w YouTube Music.</string>
     <string name="discord_presence_footer">Karta aktualizuje się, gdy zmieni się utwór, pozycja lub stan odtwarzania. Znika, gdy odtwarzanie się zatrzyma.</string>
     <string name="discord_sign_in_footer">Logowanie otwiera stronę logowania Discord. Nic nie jest wpisywane do BitChord.</string>
     <string name="discord_token">Token Discord</string>
@@ -408,7 +408,6 @@
     <string name="scrobbling_paused_footer">Last.fm i ListenBrainz są wstrzymane w tej wersji i powrócą później. Istniejące połączenia pozostają zapisane.</string>
     <string name="search_this_folder">Przeszukaj ten folder</string>
     <string name="search_this_list">Przeszukaj tę listę</string>
-    <string name="second_button">Drugi przycisk</string>
     <string name="share">Udostępnij</string>
     <string name="sharing_as">Udostępnianie jako @%1$s</string>
     <string name="sharing_listens">Udostępnianie tego, co słuchasz</string>

@@ -4850,8 +4850,6 @@ class PlaybackService : MediaLibraryService() {
                 AppSettings.discordActivityName,
                 AppSettings.discordButton1Text,
                 AppSettings.discordButton1Visible,
-                AppSettings.discordButton2Text,
-                AppSettings.discordButton2Visible,
                 AppSettings.playbackSpeed,
             ) { it.toList() }
                 .distinctUntilChanged()
@@ -4931,8 +4929,6 @@ class PlaybackService : MediaLibraryService() {
                 status = AppSettings.discordStatus.value,
                 button1Text = AppSettings.discordButton1Text.value,
                 button1Visible = AppSettings.discordButton1Visible.value,
-                button2Text = AppSettings.discordButton2Text.value,
-                button2Visible = AppSettings.discordButton2Visible.value,
                 activityType = AppSettings.discordActivityType.value,
                 activityName = AppSettings.discordActivityName.value,
             ).onFailure {

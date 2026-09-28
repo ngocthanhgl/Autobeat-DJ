@@ -294,7 +294,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">บัญชี Discord</string>
     <string name="discord_button_variables">{song_name}, {artist_name} และ {album_name} จะถูกแทนที่ด้วยข้อมูลแทร็กปัจจุบัน</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name} และ {album_name} จะถูกแทนที่ด้วยข้อมูลแทร็ก ปุ่มแรกเปิดเพลงบน YouTube Music ส่วนปุ่มที่สองเปิดโปรเจกต์นี้</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name} และ {album_name} จะถูกแทนที่ด้วยข้อมูลแทร็ก ปุ่มแรกเปิดเพลงบน YouTube Music</string>
     <string name="discord_presence_footer">การ์ดจะอัปเดตเมื่อแทร็ก ตำแหน่ง หรือสถานะการเล่นเปลี่ยนไป และจะล้างเมื่อหยุดเล่น</string>
     <string name="discord_sign_in_footer">การลงชื่อเข้าใช้จะเปิดหน้าเข้าสู่ระบบของ Discord ไม่มีการพิมพ์สิ่งใดลงใน BitChord</string>
     <string name="discord_token">โทเคน Discord</string>
@@ -463,7 +463,6 @@
     <string name="scrobbling_paused_footer">Last.fm และ ListenBrainz ถูกหยุดไว้ชั่วคราวสำหรับเวอร์ชันนี้ และจะกลับมาในภายหลัง การเชื่อมต่อที่มีอยู่ยังคงถูกบันทึกไว้</string>
     <string name="search_this_folder">ค้นหาในโฟลเดอร์นี้</string>
     <string name="search_this_list">ค้นหาในรายการนี้</string>
-    <string name="second_button">ปุ่มที่สอง</string>
     <string name="share">แชร์</string>
     <string name="sharing_as">กำลังแชร์ในชื่อ @%1$s</string>
     <string name="sharing_listens">กำลังแชร์การฟังของคุณ</string>

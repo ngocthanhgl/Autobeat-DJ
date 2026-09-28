@@ -316,7 +316,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Account Discord</string>
     <string name="discord_button_variables">{song_name}, {artist_name} e {album_name} vengono sostituiti con il brano attuale.</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name} e {album_name} vengono sostituiti con il brano. Il primo pulsante apre il brano su YouTube Music e il secondo apre questo progetto.</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name} e {album_name} vengono sostituiti con il brano. Il primo pulsante apre il brano su YouTube Music.</string>
     <string name="discord_presence_footer">La scheda si aggiorna quando cambiano il brano, la posizione o lo stato di riproduzione. Si azzera quando la riproduzione si interrompe.</string>
     <string name="discord_sign_in_footer">L\'accesso apre la pagina di login di Discord. Nulla viene digitato in BitChord.</string>
     <string name="discord_token">Token Discord</string>
@@ -494,7 +494,6 @@
     <string name="scrobbling_paused_footer">Last.fm e ListenBrainz sono in pausa per questa versione e torneranno più avanti. Le connessioni esistenti restano salvate.</string>
     <string name="search_this_folder">Cerca in questa cartella</string>
     <string name="search_this_list">Cerca in questo elenco</string>
-    <string name="second_button">Secondo pulsante</string>
     <string name="share">Condividi</string>
     <string name="sharing_as">Condivisione come @%1$s</string>
     <string name="sharing_listens">Condivisione dei tuoi ascolti</string>

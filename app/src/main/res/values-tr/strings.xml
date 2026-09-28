@@ -299,7 +299,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Discord hesabı</string>
     <string name="discord_button_variables">{song_name}, {artist_name} ve {album_name} geçerli parçayla değiştirilir.</string>
-    <string name="discord_buttons_footer">{song_name}, {artist_name} ve {album_name} parçayla değiştirilir. İlk düğme şarkıyı YouTube Music\'te açar, ikincisi ise bu projeyi açar.</string>
+    <string name="discord_buttons_footer">{song_name}, {artist_name} ve {album_name} parçayla değiştirilir. İlk düğme şarkıyı YouTube Music\'te açar.</string>
     <string name="discord_presence_footer">Parça, konum veya çalma durumu değiştiğinde kart güncellenir. Çalma durduğunda temizlenir.</string>
     <string name="discord_sign_in_footer">Giriş yapmak Discord\'un giriş sayfasını açar. BitChord\'a hiçbir şey yazılmaz.</string>
     <string name="discord_token">Discord belirteci</string>
@@ -477,7 +477,6 @@
     <string name="scrobbling_paused_footer">Last.fm ve ListenBrainz bu sürüm için duraklatıldı ve daha sonra geri dönecek. Mevcut bağlantılar kayıtlı kalır.</string>
     <string name="search_this_folder">Bu klasörde ara</string>
     <string name="search_this_list">Bu listede ara</string>
-    <string name="second_button">İkinci düğme</string>
     <string name="share">Paylaş</string>
     <string name="sharing_as">@%1$s olarak paylaşılıyor</string>
     <string name="sharing_listens">Dinlemelerin paylaşılıyor</string>

@@ -271,7 +271,7 @@
     <string name="discord">Discord</string>
     <string name="discord_account">Discord 账号</string>
     <string name="discord_button_variables">{song_name}、{artist_name} 和 {album_name} 会被替换为当前曲目的信息。</string>
-    <string name="discord_buttons_footer">{song_name}、{artist_name} 和 {album_name} 会被替换为该曲目的信息。第一个按钮会在 YouTube Music 中打开这首歌，第二个按钮会打开本项目。</string>
+    <string name="discord_buttons_footer">{song_name}、{artist_name} 和 {album_name} 会被替换为该曲目的信息。第一个按钮会在 YouTube Music 中打开这首歌。</string>
     <string name="discord_presence_footer">当曲目、播放进度或播放状态发生变化时，卡片会随之更新；播放停止时会清除。</string>
     <string name="discord_sign_in_footer">登录会打开 Discord 的登录页面，你不会在 BitChord 中输入任何内容。</string>
     <string name="discord_token">Discord 令牌</string>
@@ -435,7 +435,6 @@
     <string name="scrobbling_paused_footer">Last.fm 和 ListenBrainz 在此版本中已暂停，稍后会恢复。已有的连接仍会保留。</string>
     <string name="search_this_folder">搜索此文件夹</string>
     <string name="search_this_list">搜索此列表</string>
-    <string name="second_button">第二个按钮</string>
     <string name="share">分享</string>
     <string name="sharing_as">以 @%1$s 身份分享</string>
     <string name="sharing_listens">正在分享你的收听记录</string>
