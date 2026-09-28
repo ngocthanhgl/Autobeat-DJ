@@ -985,7 +985,15 @@ class CrossfadeController(
         // the loop rather than after it.
             if (player.repeatMode == Player.REPEAT_MODE_ONE) {
             logGuardOnce("auto", "no transition: repeat-one loop")
-            if (AppSettings.smartFadeEnabled.value || AppSettings.mixsetModeEnabled.value) requestAnalysisAround(player, duration)
+            // Loudness joins the gate: a loop still has the current track to
+            // measure, and with neither smart fade nor DJ mode on this and the
+            // track-change prefetch are the only things that ask.
+            if (AppSettings.smartFadeEnabled.value ||
+                AppSettings.mixsetModeEnabled.value ||
+                AppSettings.loudnessNormalizationEnabled.value
+            ) {
+                requestAnalysisAround(player, duration)
+            }
             // Stale otherwise: the marker would keep describing the transition
             // planned for this pair before the loop went on, at a point the
             // playhead now runs past on every lap without anything happening.
@@ -1599,7 +1607,13 @@ class CrossfadeController(
     private fun requestAnalysisAround(player: ExoPlayer, duration: Long) {
         val currentItem = player.currentMediaItem ?: return
         val nextIndex = player.nextMediaItemIndex
-        if (nextIndex == C.INDEX_UNSET) return
+        if (nextIndex == C.INDEX_UNSET) {
+            // No pair to plan, but loudness still normalises the track that is
+            // actually playing: a single-song queue reaches here on its only
+            // track and would otherwise never be measured at all.
+            if (AppSettings.loudnessNormalizationEnabled.value) requestAnalysis(currentItem, duration)
+            return
+        }
         val nextItem = player.getMediaItemAt(nextIndex)
         // DJ-only: stock Automix origin ee8a348 planned video pairs without this guard.
         if (AppSettings.mixsetModeEnabled.value && (currentItem.isVideoOrigin || nextItem.isVideoOrigin)) return
@@ -1734,22 +1748,13 @@ class CrossfadeController(
      * underneath one already playing.
      */
     /**
-     * Full-plan loudness: correction gain in dB for one deck, from its
-     * analyzed integrated LUFS. Target minus integrated, clamped ±6 dB,
-     * then peak-headroomed so peak + gain never exceeds −1 dBTP.
-     * Unmeasured (−70) or toggled off reads unity — never stage on nothing.
+     * Full-plan loudness: correction gain for one deck's item, resolving the
+     * analysis through this controller's [analysisFor] hook and delegating the
+     * math to the shared [loudnessGainDbFor] (also used by the service's
+     * re-aims, so every path computes the identical number).
      */
-    private fun loudnessGainDbFor(item: MediaItem?): Float {
-        if (item == null || !AppSettings.loudnessNormalizationEnabled.value) return 0f
-        val analysis = analysisFor(item)
-        val lufs = analysis.loudnessLufs
-        if (!lufs.isFinite() || lufs <= -69.0) return 0f
-        val target = AppSettings.loudnessTargetLufs.value.toDouble()
-        var gain = (target - lufs).coerceIn(-6.0, 6.0)
-        val peak = analysis.peakDbfs
-        if (peak.isFinite() && peak + gain > -1.0) gain = -1.0 - peak
-        return gain.toFloat()
-    }
+    private fun loudnessGainDbFor(item: MediaItem?): Float =
+        if (item == null) 0f else loudnessGainDbFor(analysisFor(item))
 
     private fun begin(
         fade: Long,
@@ -1889,15 +1894,11 @@ class CrossfadeController(
         // Full-plan loudness: aim the gain stages once per arm from each
         // deck's analyzed integrated LUFS. Not per tick — loudness doesn't
         // move during a blend; the processor glides to the new target.
-        // DJ-only: stock upstream has no loudness stage, so normal Automix
-        // parks both decks at unity (also unwinds a DJ blend's correction).
-        if (renderStyle.mixset) {
-            loudnessGains.outgoing(loudnessGainDbFor(out.currentMediaItem))
-            items.getOrNull(nextIndex)?.let { loudnessGains.incoming(loudnessGainDbFor(it)) }
-        } else {
-            loudnessGains.outgoing(0f)
-            loudnessGains.incoming(0f)
-        }
+        // Aimed in both modes: loudnessGainDbFor already returns 0f when the
+        // toggle is off (parking both decks at unity, which also unwinds a DJ
+        // blend's correction), so no separate gate is needed here.
+        loudnessGains.outgoing(loudnessGainDbFor(out.currentMediaItem))
+        items.getOrNull(nextIndex)?.let { loudnessGains.incoming(loudnessGainDbFor(it)) }
         eqSwapFired = false
         eqSwapStartProgress = 0f
         lastLoopBeats = -1f

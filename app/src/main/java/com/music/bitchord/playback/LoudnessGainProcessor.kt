@@ -4,6 +4,8 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
+import com.music.bitchord.data.settings.AppSettings
+import com.music.bitchord.playback.smart.TrackAnalysis
 import java.nio.ByteOrder
 import kotlin.math.min
 import kotlin.math.pow
@@ -120,4 +122,25 @@ interface LoudnessGains {
         override fun outgoing(gainDb: Float) = Unit
         override fun open() = Unit
     }
+}
+
+/**
+ * Full-plan loudness: correction gain in dB for one deck, from its analyzed
+ * integrated LUFS. Target minus integrated, clamped ±6 dB, then
+ * peak-headroomed so peak + gain never exceeds −1 dBTP. Unmeasured (−70),
+ * no analysis, or the toggle off reads unity — never stage on nothing.
+ *
+ * Shared by [CrossfadeController]'s per-arm aim and the service's re-aim on
+ * track change / settings change / analysis landing, so both paths compute
+ * the identical number.
+ */
+fun loudnessGainDbFor(analysis: TrackAnalysis?): Float {
+    if (analysis == null || !AppSettings.loudnessNormalizationEnabled.value) return 0f
+    val lufs = analysis.loudnessLufs
+    if (!lufs.isFinite() || lufs <= -69.0) return 0f
+    val target = AppSettings.loudnessTargetLufs.value.toDouble()
+    var gain = (target - lufs).coerceIn(-6.0, 6.0)
+    val peak = analysis.peakDbfs
+    if (peak.isFinite() && peak + gain > -1.0) gain = -1.0 - peak
+    return gain.toFloat()
 }

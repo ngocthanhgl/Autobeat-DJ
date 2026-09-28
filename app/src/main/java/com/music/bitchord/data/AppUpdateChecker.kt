@@ -94,19 +94,28 @@ object AppUpdateChecker {
     }
 
     /**
-     * The release usually carries exactly one `.apk`; take its direct download
-     * URL. A release without one (source-only draft, renamed asset) leaves
+     * Picks the release APK that matches this device's ABIs: the APK named
+     * after the first entry in [Build.SUPPORTED_ABIS] that appears in any
+     * uploaded asset wins, so an arm64 device never downloads the 32-bit build
+     * and vice versa. Falls back to the first uploaded `.apk` when no name
+     * matches (renamed or single-asset releases). A release without one leaves
      * [UpdateInfo.apkUrl] null and the UI falls back to opening the releases
      * page as before.
      */
     private fun apkAssetUrl(release: JsonObject): String? = runCatching {
-        release["assets"]?.jsonArray
+        val apks = release["assets"]?.jsonArray
             ?.mapNotNull { it as? JsonObject }
-            ?.firstOrNull { asset ->
+            ?.filter { asset ->
                 asset["name"]?.jsonPrimitive?.contentOrNull?.endsWith(".apk", ignoreCase = true) == true &&
                     asset["state"]?.jsonPrimitive?.contentOrNull == "uploaded"
             }
-            ?.get("browser_download_url")
+            .orEmpty()
+        val matched = Build.SUPPORTED_ABIS.firstNotNullOfOrNull { abi ->
+            apks.firstOrNull { asset ->
+                asset["name"]?.jsonPrimitive?.contentOrNull?.contains(abi, ignoreCase = true) == true
+            }
+        } ?: apks.firstOrNull()
+        matched?.get("browser_download_url")
             ?.jsonPrimitive
             ?.contentOrNull
     }.getOrNull()

@@ -1097,6 +1097,14 @@ class PlaybackService : MediaLibraryService() {
                 .apply { setSmallIcon(R.drawable.ic_notification_logo) },
         )
 
+        // The aim at track-change time reads whatever analysis exists then,
+        // which for a first play is none — the measurement lands seconds later
+        // on an analysis thread. Re-aim when it does instead of leaving the
+        // track at unity until the next transition or toggle. Cheap and
+        // idempotent, so any landing re-aims without checking which track it
+        // was for.
+        trackAnalyzer.onLanded = { scope.launch { reAimLoudness() } }
+
         // Both the player screen and notification route their Shuffle command
         // here. Observe its state so either surface's icon follows the queue
         // edit once that single service-side transaction has completed.
@@ -1553,14 +1561,20 @@ class PlaybackService : MediaLibraryService() {
                 override fun outgoing(low: Float, mid: Float, high: Float) =
                     spareEq.setGains(low, mid, high)
             },
-            // Full-plan loudness: same role wiring — after the handoff the
-            // incoming track sits on the session player, outgoing on spare.
+            // Full-plan loudness: aimed from begin(), which runs BEFORE the
+            // handoff — so the roles here are the pre-handoff ones: the
+            // session player still holds the outgoing track, the standby the
+            // incoming one. (The EQ/filter buses above are re-aimed per tick
+            // during the fade, i.e. after the swap, which is why they map the
+            // other way; loudness aims once and rides the chain through
+            // adoptPlayer's field swap, so each deck keeps its own track's
+            // correction for the whole blend and beyond.)
             loudnessGains = object : LoudnessGains {
                 override fun incoming(gainDb: Float) =
-                    activeLoudness.setGainDb(gainDb)
+                    spareLoudness.setGainDb(gainDb)
 
                 override fun outgoing(gainDb: Float) =
-                    spareLoudness.setGainDb(gainDb)
+                    activeLoudness.setGainDb(gainDb)
 
                 override fun open() = Unit
             },
@@ -2216,11 +2230,19 @@ class PlaybackService : MediaLibraryService() {
         if (exoPlayer.isPlaying) registerCurrentPlay()
         savePlaybackState(exoPlayer)
         prefetchAround(exoPlayer)
-        // DJ-only analysis prefetch: ticks can be suppressed for seconds
+        // Analysis prefetch: ticks can be suppressed for seconds
         // after a skip (bail cooldown), and the next track's head fetch is
         // what the coming transition is timed off. Stock upstream waits for
-        // the ticks to resume instead.
-        if (AppSettings.mixsetModeEnabled.value) crossfade?.prefetchNextAnalysis()
+        // the ticks to resume instead. Loudness joins the gate because its
+        // correction reads the same measurements, and with smart fade and
+        // DJ mode both off this is the only thing that asks for them.
+        if (AppSettings.mixsetModeEnabled.value || AppSettings.loudnessNormalizationEnabled.value) {
+            crossfade?.prefetchNextAnalysis()
+        }
+        // The roles are finally the ones each gain belongs on here: a plain
+        // advance never arms a transition at all, and a handoff re-enters this
+        // handler after [adoptPlayer] has swapped the fields.
+        reAimLoudness()
         // The second look belongs to the track it was started for; the
         // queue moving on ends it, whatever it had found — and starts
         // the new track's own, which nothing else here would. The
@@ -4577,6 +4599,26 @@ class PlaybackService : MediaLibraryService() {
         spare?.let(body)
     }
 
+    /**
+     * Re-aims both loudness stages from what each player is currently holding.
+     *
+     * The controller aims once per arm and the wiring above keeps each gain on
+     * its own deck through a handoff, but three arrivals happen outside an arm:
+     * a track becoming current in plain playback, a settings change mid-track,
+     * and the analysis itself landing after the aim already ran. Called from
+     * [onTrackBecameCurrent], the loudness collector in [observeSettings], and
+     * [TrackAnalyzer.onLanded]. Gains are recomputed, not accumulated — calling
+     * it twice for the same state is a no-op in effect.
+     */
+    private fun reAimLoudness() {
+        activeLoudness.setGainDb(
+            loudnessGainDbFor(player?.currentMediaItem?.let { trackAnalyzer.analysisFor(it.mediaId) }),
+        )
+        spareLoudness.setGainDb(
+            loudnessGainDbFor(spare?.currentMediaItem?.let { trackAnalyzer.analysisFor(it.mediaId) }),
+        )
+    }
+
     private fun observeSettings() {
         scope.launch {
             AppSettings.skipSilence.collect { on -> eachPlayer { it.skipSilenceEnabled = on } }
@@ -4628,6 +4670,21 @@ class PlaybackService : MediaLibraryService() {
         }
         scope.launch {
             AppSettings.spatialAudio.collect { applySpatialAudioEnabled() }
+        }
+        scope.launch {
+            // No drop(1): the first emission covers a service that started
+            // with a track already queued — the aim runs and, if the toggle
+            // is on, the measurement nothing has asked for yet is requested.
+            combine(
+                AppSettings.loudnessNormalizationEnabled,
+                AppSettings.loudnessTargetLufs,
+            ) { enabled, target -> enabled to target }.collect { (enabled, _) ->
+                reAimLoudness()
+                // The track-change prefetch only asks while the toggle is on;
+                // turning it on mid-track would otherwise wait for the next
+                // track to have anything to read.
+                if (enabled) crossfade?.prefetchNextAnalysis()
+            }
         }
         scope.launch {
             // Explicit <Any, _>: these flows have mixed element types, and

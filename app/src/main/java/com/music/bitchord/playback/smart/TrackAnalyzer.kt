@@ -218,6 +218,17 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
     }
 
     private val results = BoundedResults()
+
+    /**
+     * Called from whatever thread just wrote a result, with the track whose
+     * [results] entry changed. Loudness aims at arm/track-change time and reads
+     * an empty analysis as unity, so it subscribes here to re-aim once the
+     * measurement it waited for has actually landed — see
+     * [com.music.bitchord.playback.PlaybackService.reAimLoudness].
+     */
+    @Volatile
+    var onLanded: ((String) -> Unit)? = null
+
     private val running = ConcurrentHashMap.newKeySet<String>()
     private val sourceAnalysisUris = ConcurrentHashMap<String, Uri>()
     private val sourceResolutions = ConcurrentHashMap.newKeySet<String>()
@@ -488,6 +499,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             val stored = store.load(trackId) ?: return@submit
             TrackLog.d(TAG, "Restored analysis for $trackId: bpm=${stored.bpm} conf=${stored.beatConfidence}")
             results.putIfAbsent(trackId, stored)
+            onLanded?.invoke(trackId)
         }
     }
 
@@ -537,6 +549,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             if (results[trackId] == null) {
                 TrackLog.d(TAG, "Skipping analysis of $trackId: ${durationSeconds}s exceeds ${MAX_ANALYSIS_DURATION_SECONDS}s")
                 results[trackId] = empty(trackId, durationSeconds)
+                onLanded?.invoke(trackId)
             }
             return
         }
@@ -675,6 +688,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                         // the complete one that supersedes it minutes later.
                         store.save(trackId, whole)
                         restoreAttempted.add(trackId)
+                        onLanded?.invoke(trackId)
                     } else if (outcome.decodedShort &&
                         shortDecodes.merge(trackId, 1, Int::plus)!! >= MAX_SHORT_DECODE_ATTEMPTS
                     ) {
@@ -689,6 +703,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                                 trackId = trackId,
                                 duration = durationSeconds,
                             )
+                            onLanded?.invoke(trackId)
                         }
                     }
                 } else {
@@ -698,6 +713,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                     analyzeHead(trackId, analysisUri, durationSeconds, headRendition!!)?.let { head ->
                         provisional.add(trackId)
                         results[trackId] = head
+                        onLanded?.invoke(trackId)
                     }
                 }
             } catch (error: Throwable) {
@@ -728,6 +744,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                             duration = durationSeconds,
                         )
                         provisional.remove(trackId)
+                        onLanded?.invoke(trackId)
                     } else {
                         TrackLog.d(TAG, "Deferring $trackId after throw (attempt $strikes)", error)
                     }
