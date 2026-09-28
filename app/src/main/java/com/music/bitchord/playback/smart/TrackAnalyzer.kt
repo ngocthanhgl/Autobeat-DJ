@@ -44,7 +44,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -87,6 +89,61 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         val pitch: PitchTracker,
     ) {
         val inFlight = AtomicInteger(0)
+        private val releaseLock = Any()
+        private var pendingRelease: ScheduledFuture<*>? = null
+
+        /** Job start: count it and take back the warm window. */
+        fun jobStarting() {
+            synchronized(releaseLock) {
+                inFlight.incrementAndGet()
+                pendingRelease?.cancel(false)
+                pendingRelease = null
+            }
+        }
+
+        /**
+         * Job end: with nothing left running, arm the deferred release instead
+         * of dropping the sessions on the spot (P2-3).
+         */
+        fun jobFinished() {
+            if (inFlight.decrementAndGet() != 0) return
+            synchronized(releaseLock) {
+                if (inFlight.get() != 0) return
+                pendingRelease?.cancel(false)
+                // Explicit Runnable: schedule() also takes a Callable, and a
+                // bare lambda resolves ambiguously between the two in Kotlin.
+                pendingRelease = idleReleaseScheduler.schedule(
+                    Runnable { fireIdleRelease() },
+                    IDLE_MODEL_RELEASE_MS,
+                    TimeUnit.MILLISECONDS,
+                )
+            }
+        }
+
+        /** Queued work keeps the sessions warm; see [submit]. */
+        fun cancelPendingRelease() {
+            synchronized(releaseLock) {
+                pendingRelease?.cancel(false)
+                pendingRelease = null
+            }
+        }
+
+        private fun fireIdleRelease() {
+            synchronized(releaseLock) {
+                pendingRelease = null
+                if (inFlight.get() == 0) releaseModels()
+            }
+        }
+
+        /** Stop the timer and drop the sessions now; see [release]. */
+        fun releaseNow() {
+            synchronized(releaseLock) {
+                pendingRelease?.cancel(false)
+                pendingRelease = null
+                releaseModels()
+            }
+        }
+
         fun releaseModels() {
             tracker.release()
             vocals.release()
@@ -319,21 +376,22 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         val seq = jobSeq.getAndIncrement()
         override fun run() {
             currentLane.set(lane)
-            lane.inFlight.incrementAndGet()
+            lane.jobStarting()
             try {
                 block()
             } finally {
                 currentLane.remove()
-                // Lane-local idle release: the old global `running.isEmpty()`
-                // close could land while the other lane was mid-inference.
-                // Zero here means nothing submitted or running on this lane,
-                // so its sessions are safe to drop; a queued backlog on the
-                // lane keeps them warm instead of churning reloads. (A session
-                // holds its arena and parsed graph in native heap while open,
-                // which a backgrounded player cannot justify between
-                // transitions; reloading costs under a second against an
-                // analysis that already takes several.)
-                if (lane.inFlight.decrementAndGet() == 0) lane.releaseModels()
+                // Deferred idle release (P2-3): the sessions stay warm for
+                // [IDLE_MODEL_RELEASE_MS] after the lane empties, because DJ
+                // playback analyzes the next track again within one
+                // transition — releasing after every job made each analysis
+                // pay the ORT session reload (and the ~16MB VocalTracker
+                // buffer reallocate that comes with it). The timer cancels
+                // itself the moment new work starts or is even queued, and a
+                // backgrounded player still frees the native heap once the
+                // window lapses: a session holds its arena and parsed graph
+                // while open, which nothing justifies between transitions.
+                lane.jobFinished()
             }
         }
         override fun compareTo(other: AnalysisJob): Int =
@@ -359,6 +417,19 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         laneThreadFactory("bitchord-smart-low"),
     )
 
+    /**
+     * Runs the deferred idle releases (P2-3). One daemon thread for both
+     * lanes: the task only checks an atomic and may close three sessions, so
+     * there is nothing to parallelize, and keeping it off the lane executors
+     * means a release can never be queued behind an analysis.
+     */
+    private val idleReleaseScheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "bitchord-smart-idle").apply {
+            isDaemon = true
+            priority = Thread.MIN_PRIORITY
+        }
+    }
+
     private fun submit(trackId: String? = null, block: () -> Unit) {
         // Priority is the lane selector now, not just queue order: the next
         // track's analysis must never queue behind a backlog of normals.
@@ -379,8 +450,14 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         if (dualLane) {
             val lane = if ((trackId?.hashCode() ?: jobSeq.get().toInt()) and 1 == 0) highLane else lowLane
             val exec = if (lane === highLane) highExecutor else lowExecutor
+            // Queued work keeps the sessions warm: cancel the idle-release
+            // timer here, not only when the job starts running, so a job
+            // waiting behind a backlog cannot have the floor pulled out
+            // from under it (P2-3).
+            lane.cancelPendingRelease()
             exec.execute(AnalysisJob(lane, PRIORITY_NORMAL, trackId, block))
         } else {
+            highLane.cancelPendingRelease()
             highExecutor.execute(AnalysisJob(highLane, PRIORITY_NORMAL, trackId, block))
         }
     }
@@ -1808,6 +1885,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
     fun release() {
         highExecutor.shutdownNow()
         lowExecutor.shutdownNow()
+        idleReleaseScheduler.shutdownNow()
         sourceResolutionScope.cancel()
         results.clear()
         sourceAnalysisUris.clear()
@@ -1821,8 +1899,8 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         badRenditions.clear()
         triedRenditions.clear()
         discarded.clear()
-        highLane.releaseModels()
-        lowLane.releaseModels()
+        highLane.releaseNow()
+        lowLane.releaseNow()
     }
 
     companion object {
@@ -1836,6 +1914,16 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
          * pitch masks) and the cache kept every one of them forever.
          */
         const val MAX_CACHED_ANALYSES = 64
+
+        /**
+         * How long a lane's ORT sessions stay open after its queue empties
+         * (P2-3). Long enough that consecutive DJ analyses — one per
+         * transition, never more than a few minutes apart — reuse them
+         * instead of paying the session reload (and its arena/graph
+         * reallocation) every time; short enough that a backgrounded or
+         * paused player still hands the native heap back.
+         */
+        const val IDLE_MODEL_RELEASE_MS = 60_000L
 
         /** Lane for the track queued to play next. Everything else is 0. */
         const val PRIORITY_NEXT = 1
@@ -1872,11 +1960,24 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
          */
         const val MIN_DECODED_FRACTION = 0.95
 
-        /** Refusals before a track is written off as truncated rather than still filling in. */
-        const val MAX_SHORT_DECODE_ATTEMPTS = 3
+        /**
+         * Refusals before a track is written off as truncated rather than still
+         * filling in. Two, not three (P2-3): every attempt decodes the region
+         * again — tens of megabytes of float buffers plus a full model pass —
+         * and the three decode-costing counters used to stack to nine such
+         * passes on one bad track. One retry still covers the transient this
+         * cap exists for; past it the planner renders the track unmeasured
+         * (plain dissolve), which is the designed fallback, not a failure.
+         */
+        const val MAX_SHORT_DECODE_ATTEMPTS = 2
 
-        /** Uncaught throws before a track is written off rather than retried. */
-        const val MAX_THROW_ATTEMPTS = 3
+        /**
+         * Uncaught throws before a track is written off rather than retried.
+         * Two for the decode-cost reason spelled out on
+         * [MAX_SHORT_DECODE_ATTEMPTS]: a throw lands mid-decode, so each
+         * attempt pays the region allocation all over again.
+         */
+        const val MAX_THROW_ATTEMPTS = 2
 
         /**
          * Tracks longer than this are never analyzed: a full decode plus
@@ -1887,8 +1988,14 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
          */
         const val MAX_ANALYSIS_DURATION_SECONDS = 600.0
 
-        /** Null open/decode passes before the copy is burnt rather than deferred. */
-        const val MAX_OPEN_FAIL_ATTEMPTS = 3
+        /**
+         * Null open/decode passes before the copy is burnt rather than
+         * deferred. Two for the decode-cost reason on
+         * [MAX_SHORT_DECODE_ATTEMPTS] — a null that came from the decode half
+         * already paid for a partial pass, and the copies these stack across
+         * are what used to reach nine attempts per track.
+         */
+        const val MAX_OPEN_FAIL_ATTEMPTS = 2
 
         /**
          * Ticks with no readable duration before a track is recorded empty.

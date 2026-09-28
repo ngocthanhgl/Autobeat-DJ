@@ -98,6 +98,30 @@ class VocalTracker(private val context: Context) {
     @Volatile private var sessionThreads = 0
     private val lock = Any()
 
+    /**
+     * The direct input buffer from the previous [track], reused while it still
+     * fits (P2-3). The buffer is sized for the model, so its size is fixed per
+     * configuration, and a tracker belongs to one lane thread — the only
+     * cross-thread touch is [release] dropping the reference, which is safe
+     * because a caller mid-[track] holds its own. Reuse is sound because
+     * every byte of the buffer is overwritten: [fillFixedFrames] writes the
+     * window's floats plus an explicit zero pad, or the whole width when the
+     * window already matches. Allocating fresh here cost a multi-megabyte
+     * direct allocation per analysis — the churn the idle warm window in
+     * TrackAnalyzer exists to stop, undone by the very pass it was warming
+     * for.
+     */
+    @Volatile private var reusedBacking: ByteBuffer? = null
+
+    private fun backingFor(bins: Int): ByteBuffer {
+        val bytes = VocalSpectrogram.CHANNELS * bins * FIXED_FRAMES * Float.SIZE_BYTES
+        reusedBacking?.takeIf { it.capacity() >= bytes }?.let { return it }
+        return ByteBuffer
+            .allocateDirect(bytes)
+            .order(ByteOrder.nativeOrder())
+            .also { reusedBacking = it }
+    }
+
     private fun session(): OrtSession? {
         val threads = AppSettings.automixPerformanceMode.value.inferenceThreads
         session?.takeIf { sessionThreads == threads }?.let { return it }
@@ -160,10 +184,10 @@ class VocalTracker(private val context: Context) {
             // ~16MB of mix never lands on the Java heap and ORT reads it where it
             // lies instead of copying it into native memory. Both matter: this
             // runs on devices whose whole Java heap is 256MB, and the two copies
-            // this replaces were together enough to end the process.
-            val backing = ByteBuffer
-                .allocateDirect(VocalSpectrogram.CHANNELS * bins * FIXED_FRAMES * Float.SIZE_BYTES)
-                .order(ByteOrder.nativeOrder())
+            // this replaces were together enough to end the process. Reused
+            // across calls (see [reusedBacking]) so consecutive analyses stop
+            // re-allocating it.
+            val backing = backingFor(bins)
             fillFixedFrames(backing.asFloatBuffer(), spectrogram.values, bins, spectrogram.frames)
             val environment = OrtEnvironment.getEnvironment()
             val shape = longArrayOf(1, VocalSpectrogram.CHANNELS.toLong(), bins.toLong(), FIXED_FRAMES.toLong())
@@ -265,6 +289,10 @@ class VocalTracker(private val context: Context) {
             runCatching { session?.close() }
             session = null
             sessionThreads = 0
+            // Drop the reused input buffer too: the whole point of releasing
+            // after an idle window is handing the memory back, and this one
+            // is megabytes of direct allocation (see [reusedBacking]).
+            reusedBacking = null
         }
     }
 
