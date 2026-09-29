@@ -631,6 +631,8 @@ class PlaybackService : MediaLibraryService() {
     private val commitRadioQueueCommand = SessionCommand(ACTION_COMMIT_RADIO_QUEUE, Bundle.EMPTY)
     private val upgradeQualityCommand = SessionCommand(ACTION_UPGRADE_QUALITY, Bundle.EMPTY)
     private val reorderQueueCommand = SessionCommand(ACTION_REORDER_QUEUE, Bundle.EMPTY)
+    private val harmonicCommand = SessionCommand(ACTION_TOGGLE_HARMONIC, Bundle.EMPTY)
+    private val harmonicVibeCommand = SessionCommand(ACTION_SET_HARMONIC_VIBE, Bundle.EMPTY)
 
     private var favoriteActionJob: Job? = null
     private var stationActionJob: Job? = null
@@ -5598,6 +5600,8 @@ class PlaybackService : MediaLibraryService() {
                 .add(commitRadioQueueCommand)
                 .add(upgradeQualityCommand)
                 .add(reorderQueueCommand)
+                .add(harmonicCommand)
+                .add(harmonicVibeCommand)
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailablePlayerCommands(MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
