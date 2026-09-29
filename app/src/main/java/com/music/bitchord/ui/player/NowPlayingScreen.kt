@@ -6708,7 +6708,6 @@ private fun Modifier.fadingEdges(): Modifier = this
     }
 
 /** The live queue, in the player itself. */
-@Composable
 /**
  * The Harmonic Sort arc picker: a chip per vibe plus a curve preview. The
  * shape — climb, plateau, arc, descent, floor — reads at a glance, which a
