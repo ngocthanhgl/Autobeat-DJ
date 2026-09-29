@@ -424,6 +424,9 @@
     <string name="repeat_off">Repeat off</string>
     <string name="autoplay_on">AutoPlay on</string>
     <string name="autoplay_off">AutoPlay off</string>
+    <string name="harmonic_sort_on">Harmonic sort on</string>
+    <string name="harmonic_sort_off">Harmonic sort off</string>
+    <string name="harmonic_sort_analyzing">Analyzing keys, %1$d of %2$d</string>
     <string name="autoplay_queue_description">Similar music, selected to play next</string>
     <string name="autoplay_empty_description">Similar music will keep playing</string>
     <string name="high_quality_upgrading">High quality, upgrading</string>

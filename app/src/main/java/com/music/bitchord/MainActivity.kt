@@ -145,6 +145,7 @@ import com.music.bitchord.ui.screens.SourceEditorAlert
 import com.music.bitchord.ui.screens.SourcesScreen
 import com.music.bitchord.ui.screens.SpotifyCanvasAuthScreen
 import com.music.bitchord.playback.LinkRequest
+import com.music.bitchord.playback.HarmonicSort
 import com.music.bitchord.playback.MusicLink
 import com.music.bitchord.playback.OriginalVersion
 import com.music.bitchord.playback.PlayerDeepLink
@@ -161,6 +162,7 @@ import com.music.bitchord.playback.toMediaItem
 import com.music.bitchord.playback.toSong
 import com.music.bitchord.playback.toDirectYouTubeMediaItem
 import com.music.bitchord.playback.toggleAutoplay
+import com.music.bitchord.playback.toggleHarmonic
 import com.music.bitchord.playback.toggleShuffle
 import com.music.bitchord.playback.upgradeQuality
 import com.music.bitchord.download.DownloadSession
@@ -725,6 +727,8 @@ private fun BitChordApp(
         if (queueNotice?.id == shown.id) queueNotice = null
     }
     val shuffleEnabled by QueueShuffle.enabled.collectAsStateWithLifecycle()
+    val harmonicEnabled by HarmonicSort.active.collectAsStateWithLifecycle()
+    val harmonicProgress by HarmonicSort.progress.collectAsStateWithLifecycle()
     val preferMusicOnly by AppSettings.preferMusicOnly.collectAsStateWithLifecycle()
     // A conversion is deliberately scoped to the current listening session.
     // Keeping the complete original row here lets Revert restore the exact
@@ -1790,6 +1794,9 @@ private fun BitChordApp(
             // the toggle on that side prevents the UI from changing the icon
             // before its asynchronous reorder command has actually landed.
             onToggleShuffle = { controller?.toggleShuffle() },
+            harmonicEnabled = harmonicEnabled,
+            harmonicProgress = harmonicProgress,
+            onToggleHarmonic = { controller?.toggleHarmonic() },
             onCycleRepeat = {
                 controller?.let {
                     val next = when (it.repeatMode) {

@@ -250,6 +250,7 @@ import com.music.bitchord.data.model.PLAYER_ART_PX
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.artworkAt
 import com.music.bitchord.playback.BACK_RESTARTS_AFTER_MS
+import com.music.bitchord.playback.HarmonicSort
 import com.music.bitchord.playback.autoplaySectionStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -961,6 +962,9 @@ fun NowPlayingScreen(
     repeatMode: Int,
     shuffleEnabled: Boolean,
     autoplayEnabled: Boolean,
+    harmonicEnabled: Boolean,
+    /** How far Harmonic Sort has got measuring, or null while not measuring. */
+    harmonicProgress: HarmonicSort.Progress?,
     signedIn: Boolean,
     accountName: String?,
     likeStatus: LikeStatus,
@@ -985,6 +989,7 @@ fun NowPlayingScreen(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onToggleAutoplay: () -> Unit,
+    onToggleHarmonic: () -> Unit,
     onJumpTo: (Int) -> Unit,
     onRemoveFromQueue: (Int) -> Unit,
     onMoveInQueue: (Int, Int) -> Unit,
@@ -2014,6 +2019,9 @@ fun NowPlayingScreen(
             onToggleShuffle = onToggleShuffle,
             onCycleRepeat = onCycleRepeat,
             onToggleAutoplay = onToggleAutoplay,
+            onToggleHarmonic = onToggleHarmonic,
+            harmonicEnabled = harmonicEnabled,
+            harmonicProgress = harmonicProgress,
             onOpenMenu = onOpenMenu,
             onOpenAlbum = onOpenAlbum,
             onOpenArtist = onOpenArtist,
@@ -3401,7 +3409,7 @@ fun NowPlayingScreen(
             // Sized for the wider of the two capsules — the three-up one — in
             // both states. Computed for whichever was on screen it would change
             // as they swap, and the lyrics and queue glyphs would slide with it.
-            val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(3)
+            val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(4)
             val edgeInset = ((maxWidth - widestRow) / 4).coerceAtLeast(0.dp)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = edgeInset),
@@ -3473,6 +3481,30 @@ fun NowPlayingScreen(
                                 highlighted = autoplayEnabled,
                                 haptic = if (autoplayEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
                                 tapWindowMs = AUTOPLAY_TAP_WINDOW_MS,
+                            )
+                            PillDivider()
+                            PillSegment(
+                                // While measuring, the segment is the readout:
+                                // how many of the scope's tracks are placed.
+                                icon = if (harmonicProgress != null) null else BitChordIcons.MusicNote,
+                                label = harmonicProgress?.let { "${it.done}/${it.total}" },
+                                contentDescription = harmonicProgress?.let { progress ->
+                                    stringResource(
+                                        R.string.harmonic_sort_analyzing,
+                                        progress.done,
+                                        progress.total,
+                                    )
+                                } ?: stringResource(
+                                    if (harmonicEnabled) {
+                                        R.string.harmonic_sort_on
+                                    } else {
+                                        R.string.harmonic_sort_off
+                                    },
+                                ),
+                                onClick = onToggleHarmonic,
+                                highlighted = harmonicEnabled || harmonicProgress != null,
+                                haptic = if (harmonicEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+                                tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
                             )
                         }
                     } else {
@@ -3647,6 +3679,9 @@ private fun WidePlayerControls(
     repeatMode: Int,
     shuffleEnabled: Boolean,
     autoplayEnabled: Boolean,
+    harmonicEnabled: Boolean,
+    /** How far Harmonic Sort has got measuring, or null while not measuring. */
+    harmonicProgress: HarmonicSort.Progress?,
     signedIn: Boolean,
     /** For the output caption's "<name>'s Phone" — see [OutputCaption]. */
     accountName: String?,
@@ -3668,6 +3703,7 @@ private fun WidePlayerControls(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onToggleAutoplay: () -> Unit,
+    onToggleHarmonic: () -> Unit,
     onOpenMenu: () -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
@@ -3901,7 +3937,7 @@ private fun WidePlayerControls(
             // same inset on both and don't shift if this layout ever grows a
             // queue state of its own.
             BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(3)
+                val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(4)
                 val edgeInset = ((maxWidth - widestRow) / 4).coerceAtLeast(0.dp)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = edgeInset),
@@ -3972,6 +4008,30 @@ private fun WidePlayerControls(
                                     highlighted = autoplayEnabled,
                                     haptic = if (autoplayEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
                                     tapWindowMs = AUTOPLAY_TAP_WINDOW_MS,
+                                )
+                                PillDivider()
+                                PillSegment(
+                                    // While measuring, the segment is the readout:
+                                    // how many of the scope's tracks are placed.
+                                    icon = if (harmonicProgress != null) null else BitChordIcons.MusicNote,
+                                    label = harmonicProgress?.let { "${it.done}/${it.total}" },
+                                    contentDescription = harmonicProgress?.let { progress ->
+                                        stringResource(
+                                            R.string.harmonic_sort_analyzing,
+                                            progress.done,
+                                            progress.total,
+                                        )
+                                    } ?: stringResource(
+                                        if (harmonicEnabled) {
+                                            R.string.harmonic_sort_on
+                                        } else {
+                                            R.string.harmonic_sort_off
+                                        },
+                                    ),
+                                    onClick = onToggleHarmonic,
+                                    highlighted = harmonicEnabled || harmonicProgress != null,
+                                    haptic = if (harmonicEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+                                    tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
                                 )
                             }
                         } else {

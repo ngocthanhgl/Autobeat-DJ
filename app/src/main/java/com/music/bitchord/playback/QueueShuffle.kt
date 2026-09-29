@@ -47,7 +47,15 @@ object QueueShuffle {
     private var original: List<String> = emptyList()
 
     fun toggle(player: Player) {
-        if (_enabled.value) restore(player) else shuffle(player)
+        if (_enabled.value) {
+            restore(player)
+        } else {
+            // Mutually exclusive with Harmonic Sort: shuffling a measured
+            // order spends the measuring just done, and the sort's own toggle
+            // does the same to this, so the two never interleave.
+            if (HarmonicSort.isActive) HarmonicSort.cancelAndRestore(player)
+            shuffle(player)
+        }
         // Persist the new state so it survives app restarts.
         AppSettings.setShuffleEnabled(_enabled.value)
     }
@@ -184,6 +192,14 @@ object QueueShuffle {
         } else {
             reorder(player, from, order.toIntArray())
         }
+    }
+
+    /**
+     * Harmonic Sort's permutations land the same way a shuffle's do — the same
+     * single guarded edit, just a different author's order.
+     */
+    internal fun applyFromSession(player: Player, from: Int, order: List<Int>) {
+        applyOrder(player, from, order)
     }
 
     /** [applyOrder] as it arrives at the session — see [ACTION_REORDER_QUEUE]. */

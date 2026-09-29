@@ -132,6 +132,17 @@ fun MediaController.toggleShuffle() {
     )
 }
 
+/**
+ * Routes Harmonic Sort through the playback service for the same reason:
+ * the measuring, the snapshot, and the reorder all live where the queue does.
+ */
+fun MediaController.toggleHarmonic() {
+    sendCustomCommand(
+        SessionCommand(ACTION_TOGGLE_HARMONIC, Bundle.EMPTY),
+        Bundle.EMPTY,
+    )
+}
+
 /** Clears the previous queue's service and restart state before starting radio. */
 suspend fun MediaController.beginRadioQueue() {
     sendCustomCommand(

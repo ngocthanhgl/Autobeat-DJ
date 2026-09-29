@@ -127,6 +127,9 @@ const val BACK_RESTARTS_AFTER_MS = 10_000L
 /** Session command used by both the player UI and the media notification. */
 const val ACTION_TOGGLE_AUTOPLAY = "com.music.bitchord.action.TOGGLE_AUTOPLAY"
 
+/** Session command used by the queue panel's Harmonic Sort toggle. */
+const val ACTION_TOGGLE_HARMONIC = "com.music.bitchord.action.TOGGLE_HARMONIC"
+
 /** Session command used by the media notification's Shuffle button. */
 const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
 
@@ -1748,6 +1751,17 @@ class PlaybackService : MediaLibraryService() {
     private fun toggleShuffleFromSession() {
         player?.let(QueueShuffle::toggle)
         mediaSession?.setCustomLayout(notificationButtons())
+    }
+
+    private fun toggleHarmonicFromSession() {
+        val exoPlayer = player ?: return
+        // No notification rebuild: Harmonic Sort has no notification button,
+        // and its progress lives in the queue panel that sent this.
+        HarmonicSort.toggle(
+            exoPlayer,
+            HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+            current = { player },
+        )
     }
 
     private fun toggleAutoplayFromNotification() {
@@ -5568,6 +5582,7 @@ class PlaybackService : MediaLibraryService() {
             when (customCommand.customAction) {
                 ACTION_TOGGLE_AUTOPLAY -> toggleAutoplayFromNotification()
                 ACTION_TOGGLE_SHUFFLE -> toggleShuffleFromSession()
+                ACTION_TOGGLE_HARMONIC -> toggleHarmonicFromSession()
                 ACTION_START_STATION -> startStationFromSession()
                 ACTION_REVERT_TO_ORIGINAL -> revertCurrentToOriginal()
                 ACTION_BEGIN_RADIO_QUEUE -> beginRadioQueue()
