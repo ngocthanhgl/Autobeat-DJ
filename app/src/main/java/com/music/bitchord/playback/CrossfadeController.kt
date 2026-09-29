@@ -43,6 +43,8 @@ import kotlin.math.min
 import com.music.bitchord.playback.smart.plainDissolvePlan
 import com.music.bitchord.playback.smart.MixRecipe
 import com.music.bitchord.playback.smart.selectMixRecipe
+import com.music.bitchord.playback.smart.HumanizeState
+import com.music.bitchord.playback.smart.humanizePlan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -470,6 +472,18 @@ class CrossfadeController(
         val outgoingVocalMask: DoubleArray = doubleArrayOf(),
         val incomingVocalTimes: DoubleArray = doubleArrayOf(),
         val incomingVocalMask: DoubleArray = doubleArrayOf(),
+        /**
+         * DJ reactive engine R3: ARM-time snapshots of the energy curves
+         * (empty = ungated pair, no evidence). rideReactive reads the
+         * outgoing tail's level as the blend travels, so an A deck dying
+         * early under an established B gets cut instead of ridden into
+         * silence. Same snapshot idiom as the vocal masks above — the
+         * controller never retains the analyses themselves.
+         */
+        val outgoingEnergyTimes: DoubleArray = doubleArrayOf(),
+        val outgoingEnergyValues: DoubleArray = doubleArrayOf(),
+        val incomingEnergyTimes: DoubleArray = doubleArrayOf(),
+        val incomingEnergyValues: DoubleArray = doubleArrayOf(),
     )
 
     private var fadeStartedAt = 0L
@@ -569,6 +583,20 @@ class CrossfadeController(
     // ownership up and down mid-blend. Rearmed in begin().
     private var liveDuckLatchedA = false
     private var liveDelayLatchedB = false
+    // DJ reactive engine R3: mid-blend monitors (see rideReactive). An early
+    // cut fires done once; a hold parks the handoff until a deadline; the
+    // clash duck reuses the live-duck voice path. Rearmed in begin().
+    private var reactCutNow = false
+    private var reactHoldUntilMs = 0L
+    private var reactCutFired = false
+    private var reactHoldFired = false
+    private var reactDuckFired = false
+    private var reactAMean: Double? = null
+    // DJ reactive engine R1+R2: one pair's worth of spontaneity, rolled once
+    // per pair and re-applied per tick (see Humanize.kt). Session-scoped,
+    // never rearmed; draws are keyed on the pair, so a repeat-all lap
+    // replays the same mix for a pair it already drew.
+    private val humanState = HumanizeState()
 
     /**
      * Mean mask activity over [start]..[end] track seconds, or null without
@@ -628,6 +656,106 @@ class CrossfadeController(
         if (!liveVocalLogged && (liveDuckA > 0.5f || liveDelayB > 0.5f)) {
             liveVocalLogged = true
             TrackLog.d(TAG, "live vocal engaged mid-blend (duckA=$liveDuckA delayB=$liveDelayB)")
+        }
+    }
+
+    /**
+     * Mean energy over [start]..[end] track seconds, or null without
+     * evidence. Same windowing contract as [maskActivity], over the
+     * ARM-time energy snapshots carried on the render.
+     */
+    private fun energyMean(
+        times: DoubleArray,
+        values: DoubleArray,
+        start: Double = Double.NEGATIVE_INFINITY,
+        end: Double = Double.POSITIVE_INFINITY,
+    ): Double? {
+        if (times.size != values.size || times.isEmpty()) return null
+        var sum = 0.0
+        var count = 0
+        for (i in times.indices) {
+            val t = times[i]
+            if (!t.isFinite() || t < start || t > end) continue
+            val v = values[i]
+            if (!v.isFinite() || v < 0.0) continue
+            sum += v
+            count++
+        }
+        return if (count > 0) sum / count else null
+    }
+
+    /**
+     * DJ reactive engine R3: three one-shot monitors that let the blend
+     * answer the room instead of executing the plan blind. Cut and hold act
+     * on the done-gate in driveFade — never a span rescale, the latched span
+     * is law. The clash duck reuses the live-duck voice path, engaging
+     * instantly instead of slewing in over ~500 ms. Structural styles
+     * (LOOP_CUT_DROP, LOOP_ROLL, HARD_CUT) are exempt — their timing IS the
+     * trick. Every spontaneous decision leaves one `react:` line with an
+     * explicit null track (diagnostic, never filed under a song); silent
+     * pairs stay silent.
+     */
+    private fun rideReactive(progress: Float, outProgress: Float, inProgress: Float, out: ExoPlayer) {
+        if (!render.mixset) return
+        if (render.style == TransitionStyle.LOOP_CUT_DROP ||
+            render.style == TransitionStyle.LOOP_ROLL ||
+            render.style == TransitionStyle.HARD_CUT
+        ) return
+        val overlap = render.overlapSeconds
+        if (overlap <= 0.0 || fadeEndMs <= 0L) return
+        val outAlive = out.playbackState != Player.STATE_ENDED &&
+            out.playbackState != Player.STATE_IDLE
+        // Deck clocks in track seconds — the same mapping
+        // updateLiveVocalFlags rides.
+        val aNow = fadeEndMs / 1000.0 - (1.0 - outProgress) * overlap
+        val bNow = incomingCueTimeMs / 1000.0 + inProgress * overlap
+        // — Early cut: A's tail died under an established B. Riding a dead
+        // deck into silence is the opposite of DJing; hand over now and let
+        // the micro-fade at the gate cover the settle.
+        if (!reactCutFired && progress > 0.55f && inProgress > 0.5f && outAlive) {
+            val mean = reactAMean
+                ?: energyMean(render.outgoingEnergyTimes, render.outgoingEnergyValues)
+                    ?.also { reactAMean = it }
+            val tail = if (mean != null && mean > 0.0) {
+                energyMean(render.outgoingEnergyTimes, render.outgoingEnergyValues, aNow - 1.5, aNow)
+            } else {
+                null
+            }
+            if (tail != null && mean != null && tail < 0.08 * mean) {
+                reactCutFired = true
+                reactCutNow = true
+                TrackLog.d(TAG, "react: early cut — A died under an established B", null)
+            }
+        }
+        // — Extend: B's voice is audibly on its way but hasn't arrived. Park
+        // the handoff up to REACT_HOLD_MS, no longer; the gate releases early
+        // on a dead deck or a switched-off setting.
+        if (!reactHoldFired && progress >= 0.85f && outAlive) {
+            val bCueEnd = incomingCueTimeMs / 1000.0 + overlap
+            val nowHot = (maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow, bNow + 4.0)
+                ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
+            val futureHot = (maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow, bCueEnd)
+                ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
+            if (!nowHot && futureHot) {
+                reactHoldFired = true
+                reactHoldUntilMs = SystemClock.elapsedRealtime() + REACT_HOLD_MS
+                TrackLog.d(TAG, "react: holding handoff — B's voice is on its way", null)
+            }
+        }
+        // — Clash duck: both decks provably singing in the trailing window
+        // and the live path hasn't engaged. The slew would get there; a
+        // surprise vocal gets ducked now.
+        if (!reactDuckFired && !liveDuckLatchedA) {
+            val aHot = (maskActivity(render.outgoingVocalTimes, render.outgoingVocalMask, aNow - 2.0, aNow)
+                ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
+            val bHot = (maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow - 2.0, bNow)
+                ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
+            if (aHot && bHot) {
+                reactDuckFired = true
+                liveDuckA = 1f
+                liveDuckLatchedA = true
+                TrackLog.d(TAG, "react: clash duck — both decks singing", null)
+            }
         }
     }
     // Blend-feel audit: the incoming-track cap below truncates the planned
@@ -1109,6 +1237,28 @@ class CrossfadeController(
             mode = CrossfadeMode.SMART,
             mixset = mixset,
         )
+        // DJ reactive engine R1+R2: the planner is deterministic, so the same
+        // pair always plans the same ride. The humanizer jitters the trivia
+        // (overlap, rate, cue, intensities) and occasionally arms one
+        // unplanned punctuation — the anchor timing and harmonic math are
+        // never touched, so the marker, verdict and arm below all describe
+        // the mix that will actually play. Draws roll once per pair and are
+        // re-applied to each refined plan (see Humanize.kt).
+        if (mixset) {
+            val (humanPlan, note) = humanizePlan(
+                plan,
+                currentAnalysis,
+                nextAnalysis,
+                humanState,
+                "${currentItem.mediaId}→${nextItem.mediaId}",
+            )
+            plan = humanPlan
+            // Logged, not folded into the verdict: the verdict dedupes per
+            // distinct string, and a human note on every pair would bury it.
+            if (note != null) {
+                TrackLog.d(TAG, "human ${currentItem.mediaId}→${nextItem.mediaId}: $note")
+            }
+        }
         // One line per distinct verdict rather than one per 250ms tick, so the
         // log says what the planner decided for this pair without burying it.
         val verdict = "${plan.reason}|${plan.transitionStyle}|fade=${plan.fadeMs}" +
@@ -1586,6 +1736,16 @@ class CrossfadeController(
                     ?: doubleArrayOf(),
                 incomingVocalMask = nextAnalysis?.vocalActivityMask?.toDoubleArray()
                     ?: doubleArrayOf(),
+                // DJ reactive engine R3: snapshot the energy curves for the
+                // mid-blend monitors in rideReactive (same idiom as S1).
+                outgoingEnergyTimes = currentAnalysis?.energyCurve?.map { it.time }?.toDoubleArray()
+                    ?: doubleArrayOf(),
+                outgoingEnergyValues = currentAnalysis?.energyCurve?.map { it.energy }?.toDoubleArray()
+                    ?: doubleArrayOf(),
+                incomingEnergyTimes = nextAnalysis?.energyCurve?.map { it.time }?.toDoubleArray()
+                    ?: doubleArrayOf(),
+                incomingEnergyValues = nextAnalysis?.energyCurve?.map { it.energy }?.toDoubleArray()
+                    ?: doubleArrayOf(),
             ),
         )) {
             logGuardOnce("smart", "no arm: begin() refused (anchor passed or no next item)")
@@ -1835,6 +1995,12 @@ class CrossfadeController(
         liveVocalLogged = false
         liveDuckLatchedA = false
         liveDelayLatchedB = false
+        reactCutNow = false
+        reactHoldUntilMs = 0L
+        reactCutFired = false
+        reactHoldFired = false
+        reactDuckFired = false
+        reactAMean = null
         spanCapLogged = false
         outgoing = out
         incoming = into
@@ -2347,6 +2513,10 @@ class CrossfadeController(
         // after the sweep ride; the emphasis pulse below touches the SVF, not
         // the EQ, so ordering between them is irrelevant.
         rideEq(progress, outProgress, inProgress)
+        // DJ reactive engine R3: answer the room mid-blend — cut a dead A,
+        // hold for an arriving B vocal, duck a surprise clash. One-shot
+        // flags feed the done-gate below; the rides above stay untouched.
+        rideReactive(progress, outProgress, inProgress, out)
         // The decisive cut, per style: long blends (DJ_BLEND) ring out to
         // 0.95 so the release lands — the ear needs the tail to call the
         // blend satisfying. Punchy types (DJ_FILTER/HARD/LOOP) keep the 0.80
@@ -2506,6 +2676,7 @@ class CrossfadeController(
             configuredFadeMs() <= 0L
         }
         val done = progress >= 1f ||
+            reactCutNow ||
             out.playbackState == Player.STATE_ENDED ||
             out.playbackState == Player.STATE_IDLE ||
             settingSwitchedOff
@@ -2515,7 +2686,15 @@ class CrossfadeController(
         // live ramp ever holds the gate.
         val muteSettled = muteRampStartMs < 0L ||
             SystemClock.elapsedRealtime() - muteRampStartMs >= BAIL_MS
-        val gatedDone = done && muteSettled
+        // DJ reactive engine R3: a held handoff parks done until the deadline
+        // — but never on a dead deck (B solo under a corpse session is a
+        // hang, not a hold) and never against the listener's own switch.
+        // Untouched pairs carry reactHoldUntilMs == 0, so now >= 0 keeps this
+        // gate exactly as it was.
+        val outDead = out.playbackState == Player.STATE_ENDED ||
+            out.playbackState == Player.STATE_IDLE
+        val gatedDone = done && muteSettled &&
+            (SystemClock.elapsedRealtime() >= reactHoldUntilMs || outDead || settingSwitchedOff)
         if (gatedDone) {
             // Early done (natural end, cap clamp, toggled off) lands finish()
             // at progress < 1, where its volume/tempo snaps are audible. A
@@ -3751,6 +3930,8 @@ class CrossfadeController(
 
         /** Ramp used when a fade is interrupted. */
         const val BAIL_MS = 120L
+        /** DJ reactive engine R3: longest a handoff parks for B's voice. */
+        const val REACT_HOLD_MS = 6_000L
 
         /**
          * The throw send closes over this long, stepped in tick() through
