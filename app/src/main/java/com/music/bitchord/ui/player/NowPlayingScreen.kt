@@ -99,6 +99,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.automirrored.rounded.VolumeDown
@@ -7604,7 +7605,7 @@ private object CamelotColors {
 
 /**
  * Key + tempo of the playing pair, for DJs and the curious: "3A · 130 BPM
- * ⇒ 4A · 124 BPM". Sits below the quality badge (see the call site under
+ * → 4A · 124 BPM". Sits below the quality badge (see the call site under
  * the timestamps), centered like both.
  *
  * A side with nothing usable on record shows breathing dots, not a blank:
@@ -7650,10 +7651,25 @@ private fun KeyBpmRow(
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // The handover used to be a "⇒" text glyph inside one string. A font
+        // glyph brings its own line box, which sat off the text baseline and
+        // read heavier than every vector glyph around it. A rounded vector at
+        // icon size centers structurally and matches the transport's stroke.
         Text(
             text = buildAnnotatedString {
                 appendKeyBpmSide(currentBpm, currentKey, dotsAlpha)
-                withStyle(SpanStyle(color = arrowColor)) { append("   ⇒   ") }
+            },
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+        )
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+            contentDescription = null,
+            tint = arrowColor,
+            modifier = Modifier.padding(horizontal = 8.dp).size(14.dp),
+        )
+        Text(
+            text = buildAnnotatedString {
                 if (!hasNext) {
                     withStyle(SpanStyle(color = Color.White.copy(alpha = 0.45f))) { append("—") }
                 } else {

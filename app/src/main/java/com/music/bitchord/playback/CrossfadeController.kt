@@ -1845,7 +1845,8 @@ class CrossfadeController(
         TrackLog.d(
             TAG,
             "arm ${if (smart) "smart" else "standard"} fade=${fade}ms end=${endMs}ms " +
-                "cue=${incomingCueTimeMs}ms rate=$incomingPlaybackRate at=${out.currentPosition}ms " +
+                "cue=${incomingCueTimeMs}ms rate=$incomingPlaybackRate shift=${renderStyle.keyShiftSemitones} " +
+                "mixset=${renderStyle.mixset} brake=${renderStyle.brake} throw=${renderStyle.echoThrow} " +
                 "style=${render.style} bassSwap=${render.bassSwap}@${render.bassSwapFraction} " +
                 "sweep=${render.filterSweep}",
         )
@@ -2661,6 +2662,10 @@ class CrossfadeController(
         // delay + amount for closing the send at the handoff.
         val hadEffect = render.mixset && (render.echoThrow || render.brake)
         val wasDj = render.mixset
+        // Captured like the rest: render is parked below, so reading
+        // render.brake at the finish tick always sees false and the braked
+        // deck never gets homed there.
+        val wasBraked = render.mixset && render.brake
         val throwBlend = render.mixset && render.echoThrow
         val throwDelaySec = render.echoBeatSeconds
         val throwAmount = render.echoAmount
@@ -2722,6 +2727,12 @@ class CrossfadeController(
                 val rateActuallyOff =
                     abs(live.speed - wantSpeed) / wantSpeed.coerceAtLeast(1e-6f) >= 0.003f ||
                         abs(live.pitch - 1f) >= 0.003f
+                TrackLog.d(
+                    TAG,
+                    "finish handedOff lastProgress=$lastProgress live=${live.speed}x${live.pitch} " +
+                        "want=$wantSpeed rateApplied=$rateApplied deckRateReset=$deckRateReset " +
+                        "actuallyOff=$rateActuallyOff",
+                )
                 // Full-plan P2: rateActuallyOff alone authorizes the reset even
                 // when early — the exact compare proves the deck is off-home,
                 // and leaving a shifted deck for the whole next track is worse
@@ -2733,12 +2744,12 @@ class CrossfadeController(
                     it.setPlaybackParameters(PlaybackParameters(AppSettings.playbackSpeed.value, 1f))
                 }
             }
-            // Full-audit F4: a braked/spun deck feeds its dub tail at dying
-            // pitch unless homed first. The dry deck is already muted at the
-            // finish tick (flip / out.volume 0), so resetting the rate here
-            // only re-times the echo feed — post-fader throw at speed while
-            // the dry dies. DJ-correct order.
-            if (render.brake) {
+            // A braked deck fed its dub tail at dying pitch: home it before the
+            // tail rings, the way the throw's send is stepped shut above. Safe
+            // because the dry deck is already muted at the finish tick — this
+            // only re-times the echo feed. Reads the captured flag — render
+            // itself was parked further up.
+            if (wasBraked) {
                 outgoing?.setPlaybackParameters(PlaybackParameters(AppSettings.playbackSpeed.value, 1f))
                 lastBrakeRate = AppSettings.playbackSpeed.value
             }
@@ -2830,6 +2841,14 @@ class CrossfadeController(
      * of preparing it.
      */
     private fun retire(player: ExoPlayer) {
+        // Identity in the record: a retire landing on the session's own deck
+        // instead of the spare reads here as a queue that still has somewhere
+        // to be, and is the first thing asked after a handoff goes silent.
+        TrackLog.d(
+            TAG,
+            "retire count=${player.mediaItemCount} current=${player.currentMediaItemIndex} " +
+                "mediaId=${player.currentMediaItem?.mediaId}",
+        )
         // Volume first, then stop: a spare retired mid-gain (late handoff,
         // early done) would otherwise chop full-scale content into the next
         // transition. The completion guard covers the PCM-16 splice; this

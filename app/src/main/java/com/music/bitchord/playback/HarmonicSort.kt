@@ -8,6 +8,7 @@ import com.music.bitchord.data.TrackLog
 import com.music.bitchord.playback.smart.TrackAnalysis
 import com.music.bitchord.playback.smart.TrackAnalyzer
 import com.music.bitchord.playback.smart.findBestCandidate
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -86,16 +87,32 @@ object HarmonicSort {
      * synchronous callers already hold.
      */
     fun toggle(player: Player, deps: Deps, current: () -> Player? = { player }) {
+        TrackLog.d(
+            "BitChord",
+            "harmonic toggle: active=${_active.value} shuffle=${QueueShuffle.enabled.value} " +
+                "count=${player.mediaItemCount} current=${player.currentMediaItemIndex}",
+        )
         if (_active.value) {
             cancelAndRestore(player)
             return
         }
         // Mutually exclusive with shuffle: sorting a shuffled order would stack
         // intent on top of randomness, and shuffling a sorted one spends the
-        // measuring just done. Whichever is on stands down first.
-        if (QueueShuffle.enabled.value) QueueShuffle.toggle(player)
+        // measuring just done. Whichever is on stands down first. Guarded: a
+        // throw here used to abort the whole toggle with nothing on screen
+        // saying so.
+        if (QueueShuffle.enabled.value) {
+            runCatching { QueueShuffle.toggle(player) }
+                .onFailure { TrackLog.w("BitChord", "harmonic shuffle stand-down failed: ${it.message}", it) }
+        }
         val from = player.currentMediaItemIndex + 1
-        if (from >= player.mediaItemCount) return
+        if (from >= player.mediaItemCount) {
+            TrackLog.w(
+                "BitChord",
+                "harmonic toggle: nothing ahead (from=$from count=${player.mediaItemCount})",
+            )
+            return
+        }
         original = List(player.mediaItemCount) { player.getMediaItemAt(it).mediaId }
         val scopeIds = original.drop(from).take(MAX_SORT_AHEAD)
         if (scopeIds.isEmpty()) {
@@ -106,15 +123,28 @@ object HarmonicSort {
         _progress.value = Progress(0, scopeIds.size)
         val myGeneration = ++generation
         worker = deps.scope.launch {
+            TrackLog.d("BitChord", "harmonic worker started scope=${scopeIds.size}")
             for ((index, id) in scopeIds.withIndex()) {
                 if (myGeneration != generation) return@launch
-                ensureAnalysed(current(), deps, id)
+                // Guarded per track: one unmeasurable id must not take the
+                // other nineteen down with it, silently or otherwise.
+                runCatching { ensureAnalysed(current(), deps, id) }
+                    .onFailure {
+                        if (it is CancellationException) throw it
+                        TrackLog.w("BitChord", "harmonic track $id failed: ${it.message}", it)
+                    }
                 if (myGeneration != generation) return@launch
+                TrackLog.d(
+                    "BitChord",
+                    "harmonic measured $id usable=${deps.analyzer.analysisFor(id).isUsable}",
+                    about = id,
+                )
                 _progress.value = Progress(index + 1, scopeIds.size)
             }
             val live = current() ?: return@launch
             if (myGeneration != generation) return@launch
-            applyHarmonicOrder(live, deps, scopeIds)
+            runCatching { applyHarmonicOrder(live, deps, scopeIds) }
+                .onFailure { TrackLog.w("BitChord", "harmonic apply failed: ${it.message}", it) }
             _progress.value = null
         }
     }
@@ -182,7 +212,10 @@ object HarmonicSort {
         val upcoming = List(player.mediaItemCount - from) { player.getMediaItemAt(from + it) }
         val scope = scopeIds.toSet()
         val sortableSlots = upcoming.indices.filter { upcoming[it].mediaId in scope }
-        if (sortableSlots.size <= 1) return
+        if (sortableSlots.size <= 1) {
+            TrackLog.d("BitChord", "harmonic apply: only ${sortableSlots.size} scope track(s) left, keeping order")
+            return
+        }
         val analyses = sortableSlots.associate { upcoming[it].mediaId to deps.analyzer.analysisFor(upcoming[it].mediaId) }
         val anchor = player.currentMediaItem?.let { analyses[it.mediaId] ?: deps.analyzer.analysisFor(it.mediaId) }
             ?.takeIf { it.isUsable }

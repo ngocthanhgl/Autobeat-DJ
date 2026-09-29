@@ -1754,11 +1754,22 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun toggleHarmonicFromSession() {
-        val exoPlayer = player ?: return
+        val exoPlayer = player
+        // Logged either way: a tap with no player and no record is the
+        // hardest no-op to diagnose, and this is where it would hide.
+        TrackLog.d(
+            "BitChord",
+            "harmonic command: " + if (exoPlayer == null) {
+                "no session player"
+            } else {
+                "count=${exoPlayer.mediaItemCount} current=${exoPlayer.currentMediaItemIndex}"
+            },
+        )
+        val ep = exoPlayer ?: return
         // No notification rebuild: Harmonic Sort has no notification button,
         // and its progress lives in the queue panel that sent this.
         HarmonicSort.toggle(
-            exoPlayer,
+            ep,
             HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
             current = { player },
         )
