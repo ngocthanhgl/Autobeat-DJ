@@ -1390,7 +1390,8 @@ fun energyAt(analysis: TrackAnalysis, time: Double): Double? {
     return best
 }
 
-private fun meanEnergy(analysis: TrackAnalysis): Double? {
+/** Per-track energy scalar: arithmetic mean of the curve. Public for the queue sorter. */
+fun meanEnergy(analysis: TrackAnalysis): Double? {
     val energies = analysis.energyCurve.map { it.energy }.filter { it.isFinite() && it >= 0 }
     if (energies.isEmpty()) return null
     return energies.sum() / energies.size

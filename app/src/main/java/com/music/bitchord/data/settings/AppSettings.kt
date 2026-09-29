@@ -12,6 +12,7 @@ import com.music.bitchord.data.lyrics.LyricsSource
 import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.playback.EqLayout
 import com.music.bitchord.playback.EqualizerPreset
+import com.music.bitchord.playback.HarmonicSort
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -284,6 +285,13 @@ object AppSettings {
      */
     val smartFadeEnabled = MutableStateFlow(false)
     val mixsetModeEnabled = MutableStateFlow(false)
+
+    /**
+     * Harmonic Sort's set arc: which energy story the queue is rearranged to
+     * tell (see HarmonicSort.Vibe). Persisted like any other listener choice;
+     * changing it mid-sort re-sorts immediately.
+     */
+    val harmonicVibe = MutableStateFlow(HarmonicSort.Vibe.PEAK)
 
     /**
      * Real-DJ long blend: DJ overlap ceiling in seconds (default 60.0 =
@@ -758,6 +766,11 @@ object AppSettings {
         crossfadeSeconds.value = prefs.getInt(KEY_CROSSFADE, 0)
         smartFadeEnabled.value = prefs.getBoolean(KEY_SMART_FADE, false)
         mixsetModeEnabled.value = prefs.getBoolean(KEY_MIXSET_MODE, false)
+        harmonicVibe.value = runCatching {
+            HarmonicSort.Vibe.valueOf(
+                prefs.getString(KEY_HARMONIC_VIBE, null) ?: HarmonicSort.Vibe.PEAK.name,
+            )
+        }.getOrDefault(HarmonicSort.Vibe.PEAK)
         mixsetOverlapCeilingSeconds.value =
             prefs.getFloat(KEY_MIXSET_OVERLAP_CEILING_SECONDS, 60.0f).coerceIn(12.0f, 90.0f)
         automixHalfTempoLock.value = prefs.getBoolean(KEY_AUTOMIX_HALF_TEMPO_LOCK, false)
@@ -1056,6 +1069,11 @@ object AppSettings {
         }
         smartMixInProgress.value = false
         sharedHalfTimeBpm.value = null
+    }
+
+    fun setHarmonicVibe(value: HarmonicSort.Vibe) {
+        harmonicVibe.value = value
+        prefs.edit().putString(KEY_HARMONIC_VIBE, value.name).apply()
     }
 
     fun setAutomixPerformanceMode(value: AutomixPerformanceMode) {
@@ -1771,6 +1789,7 @@ object AppSettings {
     private const val KEY_CROSSFADE = "crossfade_seconds"
     private const val KEY_SMART_FADE = "smart_fade_enabled"
     private const val KEY_MIXSET_MODE = "mixset_mode_enabled"
+    private const val KEY_HARMONIC_VIBE = "harmonic_vibe"
     private const val KEY_MIXSET_OVERLAP_CEILING_SECONDS = "mixset_overlap_ceiling_seconds"
     private const val KEY_AUTOMIX_HALF_TEMPO_LOCK = "automix_half_tempo_lock"
     private const val KEY_LOUDNESS_NORMALIZATION_ENABLED = "loudness_normalization_enabled"

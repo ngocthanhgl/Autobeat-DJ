@@ -130,6 +130,15 @@ const val ACTION_TOGGLE_AUTOPLAY = "com.music.bitchord.action.TOGGLE_AUTOPLAY"
 /** Session command used by the queue panel's Harmonic Sort toggle. */
 const val ACTION_TOGGLE_HARMONIC = "com.music.bitchord.action.TOGGLE_HARMONIC"
 
+/**
+ * Session command used by the queue panel's vibe picker: persists the new
+ * arc and re-sorts the live scope under it in the same operation.
+ */
+const val ACTION_SET_HARMONIC_VIBE = "com.music.bitchord.action.SET_HARMONIC_VIBE"
+
+/** The vibe's enum name travelling with [ACTION_SET_HARMONIC_VIBE]. */
+const val EXTRA_HARMONIC_VIBE = "bitchord.harmonic.vibe"
+
 /** Session command used by the media notification's Shuffle button. */
 const val ACTION_TOGGLE_SHUFFLE = "com.music.bitchord.action.TOGGLE_SHUFFLE"
 
@@ -1773,6 +1782,18 @@ class PlaybackService : MediaLibraryService() {
             HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
             current = { player },
         )
+    }
+
+    private fun setHarmonicVibeFromSession(args: Bundle) {
+        val vibe = runCatching {
+            HarmonicSort.Vibe.valueOf(
+                args.getString(EXTRA_HARMONIC_VIBE) ?: return,
+            )
+        }.getOrNull() ?: return
+        AppSettings.setHarmonicVibe(vibe)
+        val ep = player ?: return
+        TrackLog.d("BitChord", "harmonic vibe: $vibe, re-sorting live scope", null)
+        HarmonicSort.resort(ep, HarmonicSort.Deps(scope, trackAnalyzer, AudioCache))
     }
 
     private fun toggleAutoplayFromNotification() {
@@ -5594,6 +5615,7 @@ class PlaybackService : MediaLibraryService() {
                 ACTION_TOGGLE_AUTOPLAY -> toggleAutoplayFromNotification()
                 ACTION_TOGGLE_SHUFFLE -> toggleShuffleFromSession()
                 ACTION_TOGGLE_HARMONIC -> toggleHarmonicFromSession()
+                ACTION_SET_HARMONIC_VIBE -> setHarmonicVibeFromSession(args)
                 ACTION_START_STATION -> startStationFromSession()
                 ACTION_REVERT_TO_ORIGINAL -> revertCurrentToOriginal()
                 ACTION_BEGIN_RADIO_QUEUE -> beginRadioQueue()

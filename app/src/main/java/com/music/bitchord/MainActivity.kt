@@ -162,6 +162,7 @@ import com.music.bitchord.playback.toMediaItem
 import com.music.bitchord.playback.toSong
 import com.music.bitchord.playback.toDirectYouTubeMediaItem
 import com.music.bitchord.playback.toggleAutoplay
+import com.music.bitchord.playback.setHarmonicVibe
 import com.music.bitchord.playback.toggleHarmonic
 import com.music.bitchord.playback.toggleShuffle
 import com.music.bitchord.playback.upgradeQuality
@@ -729,6 +730,7 @@ private fun BitChordApp(
     val shuffleEnabled by QueueShuffle.enabled.collectAsStateWithLifecycle()
     val harmonicEnabled by HarmonicSort.active.collectAsStateWithLifecycle()
     val harmonicProgress by HarmonicSort.progress.collectAsStateWithLifecycle()
+    val harmonicVibe by AppSettings.harmonicVibe.collectAsStateWithLifecycle()
     val preferMusicOnly by AppSettings.preferMusicOnly.collectAsStateWithLifecycle()
     // A conversion is deliberately scoped to the current listening session.
     // Keeping the complete original row here lets Revert restore the exact
@@ -1796,12 +1798,14 @@ private fun BitChordApp(
             onToggleShuffle = { controller?.toggleShuffle() },
             harmonicEnabled = harmonicEnabled,
             harmonicProgress = harmonicProgress,
+            harmonicVibe = harmonicVibe,
             onToggleHarmonic = {
                 // UI-side probe: proves the tap left the button, so a missing
                 // service line means the command died on the way, not the tap.
                 TrackLog.d("BitChord", "harmonic tap (controller=${controller != null})", null)
                 controller?.toggleHarmonic()
             },
+            onSelectHarmonicVibe = { controller?.setHarmonicVibe(it) },
             onCycleRepeat = {
                 controller?.let {
                     val next = when (it.repeatMode) {

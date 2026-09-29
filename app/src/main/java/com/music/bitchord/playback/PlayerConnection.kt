@@ -143,6 +143,19 @@ fun MediaController.toggleHarmonic() {
     )
 }
 
+/**
+ * Routes a Harmonic Sort vibe change through the playback service: the
+ * setting persists on the service side and the live scope re-sorts under
+ * the new arc in the same operation.
+ */
+fun MediaController.setHarmonicVibe(vibe: HarmonicSort.Vibe) {
+    val args = Bundle().apply { putString(EXTRA_HARMONIC_VIBE, vibe.name) }
+    sendCustomCommand(
+        SessionCommand(ACTION_SET_HARMONIC_VIBE, Bundle.EMPTY),
+        args,
+    )
+}
+
 /** Clears the previous queue's service and restart state before starting radio. */
 suspend fun MediaController.beginRadioQueue() {
     sendCustomCommand(

@@ -5,9 +5,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import com.music.bitchord.data.TrackLog
+import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.playback.smart.TrackAnalysis
 import com.music.bitchord.playback.smart.TrackAnalyzer
 import com.music.bitchord.playback.smart.findBestCandidate
+import com.music.bitchord.playback.smart.meanEnergy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlin.math.abs
 
 /**
  * Harmonic Sort as an edit to the queue, not a playback mode — the same shape
@@ -29,6 +32,11 @@ import kotlinx.coroutines.withTimeout
  * the chain where each handover scores highest — the same pair scorer the DJ
  * planner trusts ([findBestCandidate]), run greedily forward from the track
  * that is playing. Turning it off puts the queue back the way it was found.
+ *
+ * Since the vibe picker, the greedy is steered by a set arc as well as the
+ * handover: each slot maximizes `pairScore − λ·|energy − target|`, where the
+ * target comes from the selected [Vibe]. Same scorer, same real-time jumps —
+ * but the chain now climbs, peaks, or cools down on purpose.
  *
  * The measuring is the hard part, and it is deliberately sequential. The
  * analyzer drains through one or two single-threaded FIFO lanes, each decode
@@ -61,6 +69,48 @@ object HarmonicSort {
     /** How far the toggle has got through the scope, or null while not measuring. */
     data class Progress(val done: Int, val total: Int)
 
+    /**
+     * The set arc: where each position in the sorted scope should sit
+     * energy-wise. A greedy pair scorer alone makes every handover pretty
+     * but leaves the set wandering — no build, no peak, no landing. The vibe
+     * scores each candidate against where the arc wants that slot, so the
+     * chain tells a story instead of a series of nice accidents.
+     */
+    enum class Vibe {
+        WARM_UP,
+        PEAK,
+        ARC,
+        COOL_DOWN,
+        LATE_NIGHT,
+    }
+
+    /**
+     * Target normalized energy (0..1) at scope fraction [t] for [vibe].
+     * Curves, not constants: a peak with no breath is a wall, a warm-up
+     * with no patience is just quiet.
+     */
+    fun targetEnergy(vibe: Vibe, t: Double): Double {
+        val clamped = t.coerceIn(0.0, 1.0)
+        return when (vibe) {
+            Vibe.WARM_UP -> 0.25 + 0.65 * clamped
+            Vibe.PEAK -> 0.88 + 0.06 * kotlin.math.sin(clamped * Math.PI)
+            Vibe.ARC -> if (clamped < 0.65) {
+                0.30 + 0.70 * (clamped / 0.65)
+            } else {
+                1.0 - 0.70 * ((clamped - 0.65) / 0.35)
+            }
+            Vibe.COOL_DOWN -> 0.75 - 0.50 * clamped
+            Vibe.LATE_NIGHT -> 0.30 + 0.05 * kotlin.math.sin(clamped * 2 * Math.PI)
+        }.coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * How hard the arc pulls against the pair score. Pair scores and energy
+     * deviations both live ~0..1, so 0.6 lets a great handover beat the arc
+     * but not ignore it.
+     */
+    const val VIBE_LAMBDA = 0.6
+
     private val _active = MutableStateFlow(false)
 
     /** Whether the queue is currently held in harmonic order. */
@@ -72,6 +122,8 @@ object HarmonicSort {
 
     /** Media ids in their pre-sort order. Empty while the sort is off. */
     private var original: List<String> = emptyList()
+    /** The measured scope, kept so a vibe change can re-sort without re-measuring. */
+    private var scopeIds: List<String> = emptyList()
     private var worker: Job? = null
     private var generation = 0
 
@@ -123,6 +175,7 @@ object HarmonicSort {
             original = emptyList()
             return
         }
+        this.scopeIds = scopeIds
         _active.value = true
         _progress.value = Progress(0, scopeIds.size)
         val myGeneration = ++generation
@@ -168,6 +221,17 @@ object HarmonicSort {
         if (_active.value) restore(player)
         _active.value = false
         _progress.value = null
+    }
+
+    /**
+     * Re-sorts the live scope under the current vibe without re-measuring —
+     * what a vibe change calls. No-op while the sort is off or the scope
+     * has drained to one slot.
+     */
+    fun resort(player: Player, deps: Deps) {
+        if (!_active.value || scopeIds.isEmpty()) return
+        runCatching { sortAndApply(player, deps, scopeIds) }
+            .onFailure { TrackLog.w("BitChord", "harmonic resort failed: ${it.message}", it, null) }
     }
 
     /**
@@ -226,10 +290,22 @@ object HarmonicSort {
         val analyses = sortableSlots.associate { upcoming[it].mediaId to deps.analyzer.analysisFor(upcoming[it].mediaId) }
         val anchor = player.currentMediaItem?.let { analyses[it.mediaId] ?: deps.analyzer.analysisFor(it.mediaId) }
             ?.takeIf { it.isUsable }
+        val vibe = AppSettings.harmonicVibe.value
+        // Arc targets need comparable energies: min-max normalize the scope's
+        // mean energies to 0..1. A flat scope (or none measured) reads 0.5
+        // everywhere, which degrades exactly to the old pair-only greedy.
+        val rawEnergies = analyses.mapValues { (_, analysis) -> meanEnergy(analysis) }
+        val finite = rawEnergies.values.filterNotNull().filter { it.isFinite() }
+        val eMin = finite.minOrNull() ?: 0.0
+        val eMax = finite.maxOrNull() ?: 0.0
+        val energies = rawEnergies.mapValues { (_, raw) ->
+            if (raw == null || !raw.isFinite() || eMax <= eMin) 0.5
+            else ((raw - eMin) / (eMax - eMin)).coerceIn(0.0, 1.0)
+        }
         val (mixSlots, ownSlots) = sortableSlots.partition { upcoming[it].fromAutoplay }
-        val sortedOwn = sortSection(ownSlots.map { upcoming[it] }, analyses, anchor)
+        val sortedOwn = sortSection(ownSlots.map { upcoming[it] }, analyses, energies, anchor, vibe)
         val mixAnchor = sortedOwn.lastOrNull()?.let { analyses[it.mediaId] }?.takeIf { it.isUsable } ?: anchor
-        val sorted = sortedOwn + sortSection(mixSlots.map { upcoming[it] }, analyses, mixAnchor)
+        val sorted = sortedOwn + sortSection(mixSlots.map { upcoming[it] }, analyses, energies, mixAnchor, vibe)
         // Back into slots: each sorted track takes the slot its predecessor in
         // the sorted order vacated, so non-scope tracks never shift.
         val positions = HashMap<String, ArrayDeque<Int>>(sortableSlots.size)
@@ -244,32 +320,52 @@ object HarmonicSort {
     }
 
     /**
-     * The highest-scoring chain through [tracks], greedy forward from [anchor]:
-     * at each step the remaining track pairing best with the last placed one
-     * joins it. Unmeasurable tracks keep their relative order at the end —
-     * pushing them there rather than leaving them interleaved, so the chain
-     * that plays is unbroken.
+     * The highest-scoring chain through [tracks], greedy forward from [anchor] —
+     * but scored against the set arc, not just the last handover. At each step
+     * the winner maximizes `pairScore − λ·|energy − target|`: a great handover
+     * still beats the arc, but a pretty irrelevance no longer does. The slot
+     * fraction runs 0..1 across this section, so the curve lands where the
+     * listener is, not where measuring happened to finish. Unmeasurable tracks
+     * keep their relative order at the end, as before.
      */
     private fun sortSection(
         tracks: List<MediaItem>,
         analyses: Map<String, TrackAnalysis>,
+        energies: Map<String, Double>,
         anchor: TrackAnalysis?,
+        vibe: Vibe,
     ): List<MediaItem> {
         val (usable, failed) = tracks.partition { analyses[it.mediaId]?.isUsable == true }
         val ordered = ArrayList<MediaItem>(usable.size)
         val remaining = usable.toMutableList()
         var cursor = anchor
         while (remaining.isNotEmpty()) {
+            val slotFraction = if (usable.size <= 1) 0.0
+                else ordered.size.toDouble() / (usable.size - 1).toDouble()
+            val target = targetEnergy(vibe, slotFraction)
             val current = cursor
             val next = if (current == null) {
-                remaining.removeAt(0)
+                // No anchor (nothing usable playing): open on the track
+                // closest to where the arc starts.
+                var best = 0
+                var bestDistance = Double.POSITIVE_INFINITY
+                remaining.forEachIndexed { index, item ->
+                    val distance = abs((energies[item.mediaId] ?: 0.5) - target)
+                    if (distance < bestDistance) {
+                        bestDistance = distance
+                        best = index
+                    }
+                }
+                remaining.removeAt(best)
             } else {
                 var best = 0
                 var bestScore = Double.NEGATIVE_INFINITY
                 remaining.forEachIndexed { index, item ->
                     val candidate = analyses[item.mediaId] ?: return@forEachIndexed
-                    val score = findBestCandidate(current, candidate)?.candidateScore
+                    val pair = findBestCandidate(current, candidate)?.candidateScore
                         ?: return@forEachIndexed
+                    val arcPenalty = VIBE_LAMBDA * abs((energies[item.mediaId] ?: 0.5) - target)
+                    val score = pair - arcPenalty
                     if (score > bestScore) {
                         bestScore = score
                         best = index
@@ -294,6 +390,7 @@ object HarmonicSort {
             QueueShuffle.applyFromSession(player, from, partitioned)
         }
         original = emptyList()
+        scopeIds = emptyList()
     }
 
     private fun Player.indexOfId(id: String): Int? =
