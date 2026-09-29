@@ -1796,7 +1796,12 @@ private fun BitChordApp(
             onToggleShuffle = { controller?.toggleShuffle() },
             harmonicEnabled = harmonicEnabled,
             harmonicProgress = harmonicProgress,
-            onToggleHarmonic = { controller?.toggleHarmonic() },
+            onToggleHarmonic = {
+                // UI-side probe: proves the tap left the button, so a missing
+                // service line means the command died on the way, not the tap.
+                TrackLog.d("BitChord", "harmonic tap (controller=${controller != null})", null)
+                controller?.toggleHarmonic()
+            },
             onCycleRepeat = {
                 controller?.let {
                     val next = when (it.repeatMode) {

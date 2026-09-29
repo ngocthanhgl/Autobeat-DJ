@@ -36,7 +36,9 @@ import kotlinx.coroutines.withTimeout
  * worst-case tracks — firing the whole scope at once would queue minutes of
  * work, pin the CPU, and thrash the cache into evicting the very bytes being
  * measured. So one track at a time: pull its bytes, ask for its analysis,
- * wait for the answer (or the timeout), and move on. Tracks already measured —
+ * wait for the answer (or the timeout) — and every answer re-sorts and
+ * re-applies immediately, so the queue jumps track by track in real time.
+ * Tracks already measured —
  * this session or a previous one, via the analysis store — cost nothing.
  *
  * AutoPlay's tracks are sorted among themselves and stay below the ones the
@@ -91,6 +93,7 @@ object HarmonicSort {
             "BitChord",
             "harmonic toggle: active=${_active.value} shuffle=${QueueShuffle.enabled.value} " +
                 "count=${player.mediaItemCount} current=${player.currentMediaItemIndex}",
+            null,
         )
         if (_active.value) {
             cancelAndRestore(player)
@@ -103,13 +106,14 @@ object HarmonicSort {
         // saying so.
         if (QueueShuffle.enabled.value) {
             runCatching { QueueShuffle.toggle(player) }
-                .onFailure { TrackLog.w("BitChord", "harmonic shuffle stand-down failed: ${it.message}", it) }
+                .onFailure { TrackLog.w("BitChord", "harmonic shuffle stand-down failed: ${it.message}", it, null) }
         }
         val from = player.currentMediaItemIndex + 1
         if (from >= player.mediaItemCount) {
             TrackLog.w(
                 "BitChord",
                 "harmonic toggle: nothing ahead (from=$from count=${player.mediaItemCount})",
+                null,
             )
             return
         }
@@ -123,7 +127,7 @@ object HarmonicSort {
         _progress.value = Progress(0, scopeIds.size)
         val myGeneration = ++generation
         worker = deps.scope.launch {
-            TrackLog.d("BitChord", "harmonic worker started scope=${scopeIds.size}")
+            TrackLog.d("BitChord", "harmonic worker started scope=${scopeIds.size}", null)
             for ((index, id) in scopeIds.withIndex()) {
                 if (myGeneration != generation) return@launch
                 // Guarded per track: one unmeasurable id must not take the
@@ -131,20 +135,22 @@ object HarmonicSort {
                 runCatching { ensureAnalysed(current(), deps, id) }
                     .onFailure {
                         if (it is CancellationException) throw it
-                        TrackLog.w("BitChord", "harmonic track $id failed: ${it.message}", it)
+                        TrackLog.w("BitChord", "harmonic track $id failed: ${it.message}", it, null)
                     }
                 if (myGeneration != generation) return@launch
-                TrackLog.d(
-                    "BitChord",
-                    "harmonic measured $id usable=${deps.analyzer.analysisFor(id).isUsable}",
-                    about = id,
-                )
+                val usable = deps.analyzer.analysisFor(id).isUsable
+                TrackLog.d("BitChord", "harmonic measured $id usable=$usable", null)
+                // Real-time: every landing re-sorts and re-applies immediately,
+                // so the queue visibly jumps track by track while measuring.
+                // Store-hit tracks land in milliseconds, so the first jumps
+                // come almost at once.
+                current()?.let { live ->
+                    runCatching { sortAndApply(live, deps, scopeIds) }
+                        .onFailure { TrackLog.w("BitChord", "harmonic apply failed: ${it.message}", it, null) }
+                }
+                if (myGeneration != generation) return@launch
                 _progress.value = Progress(index + 1, scopeIds.size)
             }
-            val live = current() ?: return@launch
-            if (myGeneration != generation) return@launch
-            runCatching { applyHarmonicOrder(live, deps, scopeIds) }
-                .onFailure { TrackLog.w("BitChord", "harmonic apply failed: ${it.message}", it) }
             _progress.value = null
         }
     }
@@ -158,6 +164,7 @@ object HarmonicSort {
         generation++
         worker?.cancel()
         worker = null
+        TrackLog.d("BitChord", "harmonic stand-down: restoring pre-sort order", null)
         if (_active.value) restore(player)
         _active.value = false
         _progress.value = null
@@ -192,7 +199,7 @@ object HarmonicSort {
                 }
             }
         } catch (e: TimeoutCancellationException) {
-            TrackLog.w("BitChord", "harmonic sort gave up waiting on $id", about = id)
+            TrackLog.w("BitChord", "harmonic sort gave up waiting on $id", null)
         }
     }
 
@@ -206,14 +213,14 @@ object HarmonicSort {
      * since, and anything unmeasurable stays exactly where it is. The user and
      * AutoPlay sections sort separately so suggestions stay below the queue.
      */
-    private fun applyHarmonicOrder(player: Player, deps: Deps, scopeIds: List<String>) {
+    private fun sortAndApply(player: Player, deps: Deps, scopeIds: List<String>) {
         val from = player.currentMediaItemIndex + 1
         if (from >= player.mediaItemCount) return
         val upcoming = List(player.mediaItemCount - from) { player.getMediaItemAt(from + it) }
         val scope = scopeIds.toSet()
         val sortableSlots = upcoming.indices.filter { upcoming[it].mediaId in scope }
         if (sortableSlots.size <= 1) {
-            TrackLog.d("BitChord", "harmonic apply: only ${sortableSlots.size} scope track(s) left, keeping order")
+            TrackLog.d("BitChord", "harmonic apply: only ${sortableSlots.size} scope track(s) left, keeping order", null)
             return
         }
         val analyses = sortableSlots.associate { upcoming[it].mediaId to deps.analyzer.analysisFor(upcoming[it].mediaId) }
@@ -232,7 +239,7 @@ object HarmonicSort {
             val sortableAt = sortableSlots.indexOf(slot)
             if (sortableAt < 0) slot else placed[sortableAt]
         }
-        TrackLog.d("BitChord", "harmonic sort placed ${sorted.size} of ${upcoming.size} upcoming")
+        TrackLog.d("BitChord", "harmonic sort placed ${sorted.size} of ${upcoming.size} upcoming", null)
         QueueShuffle.applyFromSession(player, from, order)
     }
 
