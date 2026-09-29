@@ -491,6 +491,14 @@ object AudioCache {
     private var pendingQueue: List<String> = emptyList()
 
     /**
+     * What [forceFullPull] is filling right now. [fetchWhole] and
+     * [cacheWholeOnce] treat these like the read-ahead head: worth spending
+     * bytes on until the queue moves on.
+     */
+    private var forceJob: Job? = null
+    private var forceTargets: List<String> = emptyList()
+
+    /**
      * Gets the queue ahead of the one playing warmed up, in play order.
      *
      * The first id gets the full treatment: its opening onto disk first, so
@@ -605,8 +613,16 @@ object AudioCache {
                 if (cacheBytes) {
                     launch(TrackLog.about(next)) {
                         delay(PREFETCH_DELAY_MS)
-                        fetch(next, 0, PRELOAD_BYTES)
-                        fetchWhole(next)
+                        // [forceFullPull] may already own this track's bytes:
+                        // it pulls the same ranges with no delay, so starting
+                        // a second writer here would spend data caching
+                        // nothing (see the single-writer note above). Checked
+                        // at fire time, so a force pass that finished or gave
+                        // up hands whatever is left back to this half.
+                        if (next !in forceTargets) {
+                            fetch(next, 0, PRELOAD_BYTES)
+                            fetchWhole(next)
+                        }
                     }
                 }
                 launch {
@@ -647,7 +663,54 @@ object AudioCache {
         pendingQueue = emptyList()
         job?.cancel()
         job = null
+        forceTargets = emptyList()
+        forceJob?.cancel()
+        forceJob = null
     }
+
+    /**
+     * Pulls the whole of each id onto disk now, without [PREFETCH_DELAY_MS].
+     *
+     * The pair this exists for is the playing track and the next one: the
+     * analyzer's whole-track pass cannot run until every byte is on disk, and
+     * read-ahead's grace period plus its head-only scope is what keeps key
+     * and tempo arriving a track late. Filling the next track is uncontended
+     * — nothing else is writing its entry. Filling the playing track races
+     * the player for its entry's single writer (see [prefetchQueue]), so
+     * those writes only land when the player isn't holding it; [fetch]
+     * probes the lock first and backs off, and the bounded retries below
+     * stop chasing rather than hammer. The result is best-effort with a
+     * ceiling: bytes ahead of the playhead whenever the lock is free, and
+     * nothing spent beyond probes and a few spaced retries when it isn't.
+     *
+     * Same filters as [prefetchQueue]: device library tracks are their own
+     * file, saved downloads play from disk, and source-backed ids are not
+     * YouTube ids.
+     */
+    fun forceFullPull(mediaIds: List<String>) {
+        val videoIds = mediaIds.filter { SourceRegistry.parseTrackKey(it) == null }
+            .filter { !it.startsWith("content://") }
+            .filter { it !in Downloads.saved.value }
+        if (videoIds == forceTargets) return
+        forceTargets = videoIds
+        forceJob?.cancel()
+        forceJob = scope.launch {
+            videoIds.forEach { id ->
+                launch(TrackLog.about(id)) {
+                    fetchWhole(id)
+                    // Done owning it either way — fully cached or given up
+                    // (see [fetchWhole]): the delayed read-ahead half
+                    // re-checks at fire time and picks up whatever is left,
+                    // sequentially, never alongside this writer.
+                    forceTargets = forceTargets - id
+                }
+            }
+        }
+    }
+
+    /** The read-ahead head, plus anything [forceFullPull] is filling. */
+    private fun isReadAheadWanted(videoId: String): Boolean =
+        pendingQueue.firstOrNull() == videoId || videoId in forceTargets
 
     /**
      * Gets the whole of [videoId] onto disk, a range at a time.
@@ -666,11 +729,12 @@ object AudioCache {
             // into asking for it again by the time [prefetchQueue] has moved
             // this track's job on to a different one. Re-checking here is
             // what makes that overlap cost one interrupted read instead of
-            // up to four full ones: once this videoId is no longer the track
-            // [pendingQueue] actually wants read ahead, every further attempt
-            // is spent on a track something else now owns, and asking again
-            // in five seconds would only be wrong for longer.
-            if (pendingQueue.firstOrNull() != videoId) {
+            // up to four full ones: once this videoId is no longer wanted for
+            // read-ahead — neither the queue's head nor a [forceFullPull]
+            // target — every further attempt is spent on a track something
+            // else now owns, and asking again in five seconds would only be
+            // wrong for longer.
+            if (!isReadAheadWanted(videoId)) {
                 TrackLog.d(TAG, "$videoId is no longer the read-ahead target; stopping", about = videoId)
                 return
             }
@@ -691,7 +755,7 @@ object AudioCache {
             // to need several chunks can lose the race partway through one,
             // and a queue change mid-pass is exactly the "the player has it
             // now" case the guard in [fetchWhole] exists for.
-            if (pendingQueue.firstOrNull() != videoId) return false
+            if (!isReadAheadWanted(videoId)) return false
             val length = minOf(CHUNK_BYTES, total - position)
             if (cache.getCachedBytes(videoId, position, length) < length) {
                 fetch(videoId, position, length)

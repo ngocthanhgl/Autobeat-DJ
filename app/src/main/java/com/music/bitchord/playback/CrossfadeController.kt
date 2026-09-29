@@ -1645,9 +1645,18 @@ class CrossfadeController(
         val currentItem = player.currentMediaItem
         val nextIndex = player.nextMediaItemIndex
         val nextItem = if (nextIndex == C.INDEX_UNSET) null else player.getMediaItemAt(nextIndex)
+        val currentAnalysis = currentItem?.let { analysisFor(it) }?.takeIf { it.isUsable }
+        val nextAnalysis = nextItem?.let { analysisFor(it) }?.takeIf { it.isUsable }
         AppSettings.smartAnalysis.value = SmartAnalysis(
             current = currentItem?.let { stateOf(it, analysisFor(it)) } ?: TrackAnalysisState.WAITING,
             next = nextItem?.let { stateOf(it, analysisFor(it)) } ?: TrackAnalysisState.WAITING,
+            // Values for the Key/BPM pill, from the same analyses the states
+            // above are derived from — unusable means still waiting, so the
+            // pill keeps its dots rather than flashing a half result.
+            currentBpm = currentAnalysis?.bpm ?: 0.0,
+            currentKey = currentAnalysis?.key ?: "",
+            nextBpm = nextAnalysis?.bpm ?: 0.0,
+            nextKey = nextAnalysis?.key ?: "",
         )
     }
 

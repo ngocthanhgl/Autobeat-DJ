@@ -1909,6 +1909,15 @@ enum class TrackAnalysisState {
 data class SmartAnalysis(
     val current: TrackAnalysisState = TrackAnalysisState.WAITING,
     val next: TrackAnalysisState = TrackAnalysisState.WAITING,
+    /**
+     * Measured tempo and raw analyzer key ("C# minor") for the Key/BPM pill.
+     * 0.0 / "" means nothing usable is on record yet — the pill shows its
+     * waiting dots, not these.
+     */
+    val currentBpm: Double = 0.0,
+    val currentKey: String = "",
+    val nextBpm: Double = 0.0,
+    val nextKey: String = "",
 )
 
 /**

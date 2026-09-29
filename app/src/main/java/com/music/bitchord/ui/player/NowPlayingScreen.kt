@@ -193,6 +193,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -228,6 +229,9 @@ import com.music.bitchord.data.NerdStats
 import com.music.bitchord.data.listentogether.ListenTogether
 import com.music.bitchord.data.listentogether.PartyMember
 import com.music.bitchord.data.settings.TrackAnalysisState
+import com.music.bitchord.playback.smart.camelotLabel
+import com.music.bitchord.playback.smart.camelotOf
+import com.music.bitchord.playback.smart.isHarmonicMatch
 import com.music.bitchord.data.canvas.CanvasArtwork
 import com.music.bitchord.data.canvas.CanvasRepository
 import com.music.bitchord.data.lyrics.CharGrowth
@@ -3257,6 +3261,26 @@ fun NowPlayingScreen(
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(horizontal = 8.dp),
+                )
+            }
+
+            // Key + tempo of the pair, for DJs and the curious: below the
+            // quality badge, above the transport, centered like both. Always
+            // present once a track is loaded — dots while a side is still
+            // being measured — so the transport below never shifts when the
+            // numbers land.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                KeyBpmRow(
+                    currentBpm = smartAnalysis.currentBpm,
+                    currentKey = smartAnalysis.currentKey,
+                    nextBpm = smartAnalysis.nextBpm,
+                    nextKey = smartAnalysis.nextKey,
+                    hasNext = hasNext,
                 )
             }
 
@@ -7493,6 +7517,112 @@ private fun LosslessLabel(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/**
+ * One hue per Camelot number, anchored the Mixed In Key way with C major
+ * (8B) on red; the minor ring runs a shade deeper, the major ring brighter.
+ * A single object so a measured MIK palette can replace the wheel later
+ * without touching the row below.
+ */
+private object CamelotColors {
+    fun colorFor(number: Int, minor: Boolean): Color {
+        val hue = (((number - 8) * 30) % 360 + 360) % 360
+        return Color.hsv(
+            hue.toFloat(),
+            if (minor) 0.80f else 0.90f,
+            if (minor) 0.85f else 0.95f,
+        )
+    }
+
+    fun colorForKey(key: String): Color? {
+        val (number, minor) = camelotOf(key) ?: return null
+        return colorFor(number, minor)
+    }
+}
+
+/**
+ * Key + tempo of the playing pair, for DJs and the curious: "3A · 130 BPM
+ * ⇒ 4A · 124 BPM". Sits below the quality badge (see the call site under
+ * the timestamps), centered like both.
+ *
+ * A side with nothing usable on record shows breathing dots, not a blank:
+ * the pill is always present once a track is loaded, so the transport below
+ * never shifts when the numbers land. No next track (or a failed analysis)
+ * reads as a dim dash rather than dots that would never resolve.
+ */
+@Composable
+private fun KeyBpmRow(
+    currentBpm: Double,
+    currentKey: String,
+    nextBpm: Double,
+    nextKey: String,
+    hasNext: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    // The waiting dots breathe rather than blink: the same
+    // infinite-transition idiom as the lossless shimmer, slower and subtler.
+    val dotsAlpha by rememberInfiniteTransition(label = "keybpm-dots").animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "keybpm-dots-alpha",
+    )
+    // Green when the move is harmonic by the Camelot rules, dim red when it
+    // clashes, neutral while either side is still being measured.
+    val arrowColor = when {
+        !hasNext || currentKey.isBlank() || nextKey.isBlank() ->
+            Color.White.copy(alpha = 0.45f)
+        isHarmonicMatch(currentKey, nextKey) ->
+            Color(0xFF4ADE80).copy(alpha = 0.9f)
+        else ->
+            Color(0xFFF87171).copy(alpha = 0.75f)
+    }
+    Row(
+        modifier = modifier
+            .thumbnailBorder(RoundedCornerShape(percent = 50))
+            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(percent = 50))
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = buildAnnotatedString {
+                appendKeyBpmSide(currentBpm, currentKey, dotsAlpha)
+                withStyle(SpanStyle(color = arrowColor)) { append("   ⇒   ") }
+                if (!hasNext) {
+                    withStyle(SpanStyle(color = Color.White.copy(alpha = 0.45f))) { append("—") }
+                } else {
+                    appendKeyBpmSide(nextBpm, nextKey, dotsAlpha)
+                }
+            },
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+        )
+    }
+}
+
+/** One side of [KeyBpmRow]: colored Camelot code + white tempo, or dots. */
+private fun AnnotatedString.Builder.appendKeyBpmSide(bpm: Double, key: String, dotsAlpha: Float) {
+    val label = camelotLabel(key)
+    if (bpm > 0 && label != null) {
+        withStyle(
+            SpanStyle(
+                color = CamelotColors.colorForKey(key) ?: Color.White.copy(alpha = 0.87f),
+                fontWeight = FontWeight.SemiBold,
+            ),
+        ) {
+            append(label)
+        }
+        withStyle(SpanStyle(color = Color.White.copy(alpha = 0.87f))) {
+            append(" · ${"%.0f".format(bpm)} BPM")
+        }
+    } else {
+        withStyle(SpanStyle(color = Color.White.copy(alpha = dotsAlpha))) { append("...") }
     }
 }
 

@@ -1162,6 +1162,30 @@ fun camelotOf(key: String): Pair<Int, Boolean>? {
     return (((7 + fifthSteps) % 12) + 1) to minor
 }
 
+/**
+ * The two-or-three characters a DJ reads: "C# minor" -> "3A", "F major" ->
+ * "4B". Null when [camelotOf] cannot parse the key.
+ */
+fun camelotLabel(key: String): String? {
+    val (number, minor) = camelotOf(key) ?: return null
+    return "$number${if (minor) "A" else "B"}"
+}
+
+/**
+ * Whether two analyzer keys are a harmonic move by the Camelot rules: the
+ * same code, one step around the wheel on the same ring, or the A/B switch
+ * on the same number. Anything else is a clash the arrow should say so
+ * about, not a verdict on whether the transition still works.
+ */
+fun isHarmonicMatch(left: String, right: String): Boolean {
+    val (leftNumber, leftMinor) = camelotOf(left) ?: return false
+    val (rightNumber, rightMinor) = camelotOf(right) ?: return false
+    if (leftNumber == rightNumber) return true
+    if (leftMinor != rightMinor) return false
+    val step = min(abs(leftNumber - rightNumber), 12 - abs(leftNumber - rightNumber))
+    return step == 1
+}
+
 private fun keyScoreOf(
     leftNumber: Int,
     leftMinor: Boolean,

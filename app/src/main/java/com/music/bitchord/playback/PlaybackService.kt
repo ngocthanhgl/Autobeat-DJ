@@ -4306,6 +4306,14 @@ class PlaybackService : MediaLibraryService() {
         val next = upcomingSongs.firstOrNull()
         if (!preferAudio || next?.isVideo != true) {
             preferredPrefetchJob = null
+            // The analyzer's whole-track pass cannot run until every byte is
+            // on disk, and read-ahead's grace period is what keeps key and
+            // tempo arriving a track late: pull the playing track and the
+            // next one in full now, without the delay. Deduplicated inside
+            // against the queue moving, so repeated calls here are free.
+            AudioCache.forceFullPull(
+                listOfNotNull(player.currentMediaItem?.mediaId) + upcomingSongs.map { it.videoId },
+            )
             warm(upcomingSongs)
             return
         }
@@ -4315,6 +4323,8 @@ class PlaybackService : MediaLibraryService() {
         // media id and every byte spent on the video would be wasted. An
         // unchanged result is the fallback and is warmed on the same path.
         AudioCache.cancel()
+        // The current track's id is settled even while the next one isn't.
+        AudioCache.forceFullPull(listOfNotNull(player.currentMediaItem?.mediaId))
         preferredPrefetchJob = scope.launch {
             val preferred = runCatching { YtMusicRepository.resolveAudio(next) }
                 .onFailure {
