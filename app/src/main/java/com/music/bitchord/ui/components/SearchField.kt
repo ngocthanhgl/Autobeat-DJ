@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -53,6 +54,7 @@ fun SearchField(
     modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     // Both ways of saying "search this" do the same two things, so they're
     // written once here rather than twice.
     val submit = {
@@ -118,7 +120,10 @@ fun SearchField(
                     .clip(CircleShape)
                     .clickable {
                         onQueryChange("")
-                        focusManager.clearFocus()
+                        // Clearing is an edit, not a dismissal: leave the user
+                        // ready to immediately type their next search.
+                        focusRequester.requestFocus()
+                        keyboardController?.show()
                     },
                 contentAlignment = Alignment.Center,
             ) {

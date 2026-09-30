@@ -345,9 +345,21 @@ fun SettingsScreen(
     val search = SettingsSearch(searchQuery)
 
     // What is left after a keystroke is a different list, and the offset the
-    // last one was scrolled to means nothing in it.
-    val scrollState = rememberScrollState()
-    LaunchedEffect(searchQuery) { scrollState.scrollTo(0) }
+    // last one was scrolled to means nothing in it. Saved across recreation
+    // (language change) so the position survives — except the very first
+    // composition, where the restored position is the one to keep.
+    val scrollState = rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) }
+    var isFirstSearchComposition by remember { mutableStateOf(true) }
+    LaunchedEffect(searchQuery) {
+        if (isFirstSearchComposition && searchQuery.isEmpty()) {
+            // Skip the initial composition during Activity recreation:
+            // rememberSaveable already restored the scroll position.
+            isFirstSearchComposition = false
+        } else {
+            isFirstSearchComposition = false
+            scrollState.scrollTo(0)
+        }
+    }
 
     Column(
         modifier = modifier

@@ -231,6 +231,7 @@ import com.music.bitchord.ui.replay.rememberReplayState
 import com.music.bitchord.ui.theme.BitChordTheme
 import com.music.bitchord.ui.theme.rememberArtworkPalette
 import com.music.bitchord.ui.theme.SystemBarIcons
+import com.music.bitchord.ui.utils.guardSheetFromContentTouches
 import com.music.bitchord.ui.utils.rememberIosOverscrollFactory
 import com.music.bitchord.ui.performance.resolvePerformanceRefreshRate
 import dev.chrisbanes.haze.HazeState
@@ -2896,9 +2897,10 @@ private fun BitChordApp(
         // ---- Now Playing ----
         // Only raised where it isn't already open beside the page.
         if (!playerDocked && showNowPlaying && playerSong != null) {
+            val nowPlayingSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ModalBottomSheet(
                 onDismissRequest = { showNowPlaying = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                sheetState = nowPlayingSheetState,
                 // The player fills the screen and paints its own background to
                 // the very top, so the sheet's default 28.dp top corners would
                 // only cut two notches out of the artwork behind the status bar.
@@ -2916,7 +2918,11 @@ private fun BitChordApp(
                 // sheet always spans the full window this app draws it for.
                 sheetMaxWidth = Dp.Unspecified,
             ) {
-                nowPlaying(playerSong, false)
+                // Keeps a sheet still "settling" after a lyrics or queue
+                // scroll from taking the next touch meant for that list.
+                Box(Modifier.guardSheetFromContentTouches(nowPlayingSheetState)) {
+                    nowPlaying(playerSong, false)
+                }
             }
         }
 

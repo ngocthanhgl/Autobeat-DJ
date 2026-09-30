@@ -156,9 +156,14 @@ fun LyricsSourcesDialog(
             // inside — the drag measures itself against a fixed row pitch and
             // a lazy list would recycle the row being dragged out from under
             // the finger.
+            // Viewport height is measured outside the scroll — a verticalScroll
+            // with no bound measures its child at unbounded height, and the
+            // dialog would happily size to all providers plus buttons.
+            var viewportHeightPx by remember { mutableStateOf(0) }
             Box(
                 modifier = Modifier
                     .heightIn(max = SOURCES_MAX_HEIGHT)
+                    .onSizeChanged { viewportHeightPx = it.height }
                     .verticalScroll(rememberScrollState()),
             ) {
                 ReorderableSourceList(
