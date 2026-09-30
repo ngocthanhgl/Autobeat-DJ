@@ -970,6 +970,14 @@ class PlaybackService : MediaLibraryService() {
                 // its old seed memoized. Detect that state at its source and
                 // make the current track eligible for a fresh load.
                 refreshAutoplayIfQueueEmpty()
+                // Same current track but a changed playlist: the next track
+                // moved (Harmonic Sort jump, drag, refill). The mix-zone
+                // marker and half-time suffix below still describe the OLD
+                // pair until a replan succeeds, so drop them now and measure
+                // the new next without waiting for the tick.
+                if (exoPlayer.currentMediaItem?.mediaId == lastTimelineCurrentId) {
+                    crossfade?.onQueueReordered()
+                }
             }
         }
     }
@@ -2177,6 +2185,10 @@ class PlaybackService : MediaLibraryService() {
         alreadyAudible: Boolean = false,
     ) {
         val exoPlayer = player ?: return
+        // Anchor for the reorder detector in [onTimelineChanged]: a playlist
+        // change that leaves this id in place is a reorder (Harmonic Sort
+        // jump, drag, autoplay refill), not an advance.
+        lastTimelineCurrentId = mediaItem?.mediaId
 
         // A crossfade handoff never fires [formatListener] for the entering
         // track — [CrossfadeController] starts its decoder during ARMING,
@@ -2929,6 +2941,10 @@ class PlaybackService : MediaLibraryService() {
      * queue actually moving on. Cleared by the transition it describes.
      */
     private var swappingMediaId: String? = null
+    // Anchor for the reorder detector in onTimelineChanged (see
+    // onTrackBecameCurrent): the current track's id at the last real
+    // advance. A playlist change that leaves it in place is a reorder.
+    private var lastTimelineCurrentId: String? = null
 
     /**
      * When the audio was last cut for a quality swap, so the analytics listener

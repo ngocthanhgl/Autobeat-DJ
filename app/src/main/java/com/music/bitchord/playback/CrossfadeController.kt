@@ -1794,6 +1794,22 @@ class CrossfadeController(
     }
 
     /**
+     * Reorder hook, called from the service's onTimelineChanged when the
+     * playlist changed but the current track didn't (Harmonic Sort jump,
+     * drag, autoplay refill). The mix-zone marker and the half-time suffix
+     * describe the OLD pair until a replan succeeds — which needs the new
+     * next measured — so drop them now, republish the pill for the new next
+     * immediately, and kick its analysis without waiting for the tick.
+     */
+    fun onQueueReordered() {
+        val player = runCatching { active() }.getOrNull() ?: return
+        AppSettings.smartTransitionWindow.value = null
+        AppSettings.sharedHalfTimeBpm.value = null
+        publishAnalysisState()
+        requestAnalysisAround(player, player.duration)
+    }
+
+    /**
      * Keeps the stats line describing the pair that is actually playing.
      *
      * Cheap enough to run unconditionally — two concurrent-map lookups and a

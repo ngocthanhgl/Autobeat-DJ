@@ -3305,10 +3305,24 @@ private fun planTransitionInner(
         )
     }
     if (mixset && selectedType == TransitionType.HARD_CUT) {
+        // Booth manners: a naked cut slams on peak-to-peak pairs, so the cut
+        // only stands as a same-file skip proxy (handled above). With a
+        // trusted drop the outgoing deck backspins onto it; otherwise the
+        // pair washes out on echo instead of chopping.
+        if (dropInB != null) {
+            return applyMixsetFireFloor(
+                backspinPlan(
+                    analysis, nextAnalysis, length, nextLength,
+                    playbackTime, mixAnchor, dropInB, proxyScore, policy.reasons, mixset,
+                ),
+                length, mixset,
+            )
+        }
         return applyMixsetFireFloor(
-            cutPlan(
+            washPlan(
                 analysis, nextAnalysis, length, nextLength,
                 playbackTime, mixAnchor, proxyScore, policy.reasons, mixset,
+                longWash = true,
             ),
             length, mixset,
         )

@@ -140,6 +140,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -6711,6 +6712,10 @@ private fun Modifier.fadingEdges(): Modifier = this
  * The Harmonic Sort arc picker: a chip per vibe plus a curve preview. The
  * shape — climb, plateau, arc, descent, floor — reads at a glance, which a
  * name alone doesn't. Shown only while the sort holds the queue.
+ *
+ * Collapsed to one line by default (curve + current vibe chip, tap to open
+ * the full chip row): the queue is for reading tracks, and the picker was
+ * eating a whole track slot.
  */
 @Composable
 private fun VibeRow(
@@ -6718,9 +6723,14 @@ private fun VibeRow(
     onSelect: (HarmonicSort.Vibe) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(percent = 50))
+                .clickable(onClick = { expanded = !expanded })
+                .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -6728,36 +6738,48 @@ private fun VibeRow(
                 style = MaterialTheme.typography.labelLarge,
                 color = Color.White.copy(alpha = 0.6f),
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(8.dp))
             ArcPreview(
                 vibe = vibe,
                 modifier = Modifier
                     .weight(1f)
-                    .height(30.dp),
+                    .height(if (expanded) 30.dp else 20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = vibeLabel(vibe),
+                style = MaterialTheme.typography.labelLarge,
+                color = Color(0xFF4ADE80),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(Color(0xFF4ADE80).copy(alpha = 0.14f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
             )
         }
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            HarmonicSort.Vibe.entries.forEach { entry ->
-                val selected = entry == vibe
-                Text(
-                    text = vibeLabel(entry),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (selected) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.6f),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(
-                            if (selected) Color(0xFF4ADE80).copy(alpha = 0.14f)
-                            else Color.White.copy(alpha = 0.06f),
-                        )
-                        .clickable(onClick = { onSelect(entry) })
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                )
+        if (expanded) {
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                HarmonicSort.Vibe.entries.forEach { entry ->
+                    val selected = entry == vibe
+                    Text(
+                        text = vibeLabel(entry),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (selected) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.6f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(percent = 50))
+                            .background(
+                                if (selected) Color(0xFF4ADE80).copy(alpha = 0.14f)
+                                else Color.White.copy(alpha = 0.06f),
+                            )
+                            .clickable(onClick = { onSelect(entry) })
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                    )
+                }
             }
         }
     }
@@ -6894,7 +6916,7 @@ private fun InlineQueue(
         ) {
             Text(
                 text = stringResource(R.string.queue),
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 color = Color.White,
                 modifier = Modifier.weight(1f),
             )
@@ -6913,7 +6935,7 @@ private fun InlineQueue(
         // preview — the shape (climb, plateau, arc, descent, floor) reads at
         // a glance, which a name alone doesn't.
         if (harmonicActive) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             VibeRow(
                 vibe = harmonicVibe,
                 onSelect = onSelectHarmonicVibe,
@@ -6970,7 +6992,7 @@ private fun InlineQueue(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 14.dp),
+                            .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
@@ -7449,7 +7471,7 @@ private fun InlineQueueRow(
             .clip(RoundedCornerShape(8.dp))
             .background(if (dragging) Color.White.copy(alpha = 0.06f) else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (draggable) {
@@ -7481,21 +7503,21 @@ private fun InlineQueueRow(
             model = song.thumbnailUrl,
             contentDescription = null,
             modifier = Modifier
-                .size(44.dp)
+                .size(36.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .thumbnailBorder(RoundedCornerShape(6.dp))
                 .background(Color.White.copy(alpha = 0.08f)),
         )
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             ExplicitSongTitle(
                 song = song,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 color = if (isCurrent) Color.White else Color.White.copy(alpha = 0.92f),
             )
             Text(
                 text = song.artist,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = Color.White.copy(alpha = 0.55f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -7512,7 +7534,7 @@ private fun InlineQueueRow(
         }
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(28.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onRemove),
             contentAlignment = Alignment.Center,
@@ -7521,7 +7543,7 @@ private fun InlineQueueRow(
                 Icons.Rounded.Close,
                 contentDescription = stringResource(R.string.remove_from_queue),
                 tint = Color.White.copy(alpha = 0.55f),
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(16.dp),
             )
         }
     }
