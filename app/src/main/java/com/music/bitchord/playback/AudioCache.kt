@@ -881,7 +881,7 @@ object AudioCache {
      *
      * A no-op for anything that isn't a YouTube-backed track.
      */
-    fun requestAnalysisHead(uri: Uri) {
+    fun requestAnalysisHead(uri: Uri, full: Boolean = false) {
         if (!::cache.isInitialized) return
         if (upstreamFactory == null) return
         val videoId = uri.getQueryParameter("v") ?: return
@@ -896,7 +896,18 @@ object AudioCache {
         scope.launch {
             try {
                 val total = runCatching { StreamResolver.contentLength(videoId) }.getOrNull() ?: 0L
-                val want = analysisHeadSize(total)
+                // A priority track (the next two ahead) needs the whole copy,
+                // not a 4MB prefix: the analyzer's full pass refuses partial
+                // bytes, and a capped head strands the track provisional for
+                // the rest of the session. Still one round, one encoding —
+                // the full Opus analysis copy is small enough that this is
+                // the same single fetch, just uncapped. Unknown length falls
+                // back to the 16MB cap, which covers any real Opus copy.
+                val want = if (full) {
+                    if (total > 0) total else MAX_ANALYSIS_TRACK_BYTES
+                } else {
+                    analysisHeadSize(total)
+                }
                 if (!clearPartialHead(videoId, want)) return@launch
                 fetch(
                     cacheKey = videoId,

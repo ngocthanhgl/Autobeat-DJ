@@ -239,6 +239,18 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
     private val provisional = ConcurrentHashMap.newKeySet<String>()
 
     /**
+     * Track ids the queue needs measured first — the next two ahead of the
+     * playing track, set by the service every track change, reorder and
+     * mid-track pull. Read on the playback thread, written rarely: a plain
+     * volatile set, never mutated in place. Drives two things: lane priority
+     * in [submit] (a next track never queues behind a backlog of normals)
+     * and full-size head fetches in [request] (one round, one encoding, the
+     * whole Opus copy — a 4MB cap is what strands tracks provisional).
+     */
+    @Volatile
+    var priorityIds: Set<String> = emptySet()
+
+    /**
      * Cached prefix size, in bytes, at the last head attempt on each
      * *rendition*. See [headWorthTrying].
      *
@@ -456,7 +468,12 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         // safe) while every new job takes the newly selected lane.
         // 3) True dual lane in PERFORMANCE: hash-partition across high/low so
         // head/tail of different tracks overlap (same track still mutex via running set).
-        // PRIORITY_NORMAL for all jobs; lane choice is the parallelism.
+        // A priority job jumps the queue on its lane — and outside PERFORMANCE
+        // there is only one lane, so a next-track job arriving while the
+        // current track's full decode runs goes to the idle low lane instead
+        // of waiting behind it (per-lane tracker instances plus the global
+        // [running] guard keep the overlap safe).
+        val priority = if (trackId != null && trackId in priorityIds) PRIORITY_NEXT else PRIORITY_NORMAL
         val dualLane = AppSettings.automixPerformanceMode.value == AutomixPerformanceMode.PERFORMANCE
         if (dualLane) {
             val lane = if ((trackId?.hashCode() ?: jobSeq.get().toInt()) and 1 == 0) highLane else lowLane
@@ -466,10 +483,13 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             // waiting behind a backlog cannot have the floor pulled out
             // from under it (P2-3).
             lane.cancelPendingRelease()
-            exec.execute(AnalysisJob(lane, PRIORITY_NORMAL, trackId, block))
+            exec.execute(AnalysisJob(lane, priority, trackId, block))
+        } else if (priority == PRIORITY_NEXT && highExecutor.activeCount > 0) {
+            lowLane.cancelPendingRelease()
+            lowExecutor.execute(AnalysisJob(lowLane, priority, trackId, block))
         } else {
             highLane.cancelPendingRelease()
-            highExecutor.execute(AnalysisJob(highLane, PRIORITY_NORMAL, trackId, block))
+            highExecutor.execute(AnalysisJob(highLane, priority, trackId, block))
         }
     }
 
@@ -622,7 +642,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             // rest, and a queued track reaches its own transition carrying an
             // entry-only estimate: no content end, no mix-out anchor, no vocal
             // mask, which is most of what the outgoing half of a blend reads.
-            if (trackId in provisional && !usableComplete) cache.requestAnalysisHead(analysisUri)
+            if (trackId in provisional && !usableComplete) cache.requestAnalysisHead(analysisUri, full = trackId in priorityIds)
             return
         }
         // The strike count belongs to the attempt that was given up on, not to
@@ -641,7 +661,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             // never fetches it at all — see [AudioCache.requestAnalysisHead],
             // which is a no-op after the first call and for anything that isn't
             // a YouTube-backed track.
-            cache.requestAnalysisHead(analysisUri)
+            cache.requestAnalysisHead(analysisUri, full = trackId in priorityIds)
             return
         }
         // Stuck watchdog (P0/F5): a job that has occupied its lane past

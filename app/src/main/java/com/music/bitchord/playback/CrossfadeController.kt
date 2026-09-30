@@ -1150,6 +1150,7 @@ class CrossfadeController(
                         requestAnalysisAround(player, duration)
                     }
                 }
+                ensureFullNext(player)
             }
             return
         }
@@ -1779,6 +1780,32 @@ class CrossfadeController(
         if (AppSettings.mixsetModeEnabled.value && (currentItem.isVideoOrigin || nextItem.isVideoOrigin)) return
         requestAnalysis(currentItem, duration)
         requestAnalysis(nextItem, nextItemDurationMs(nextIndex, nextItem))
+    }
+
+    /**
+     * Provisional-next escalator (DJ-only): a head result counts usable, so
+     * without this the next two tracks sit on entry-only estimates until
+     * their own transitions — no content end, no mix-out anchor, no vocal
+     * mask on the outgoing side. For each of the next two that is still
+     * provisional, re-fire the full byte pull (deduped inside the cache, so
+     * the per-tick call is free once the bytes land) and re-issue the
+     * request, which the analyzer's supersede rule then promotes to the
+     * whole-track pass. Runs on the tick; the tick is 250ms IDLE and the
+     * calls below are map lookups plus no-ops when there is nothing to do.
+     */
+    private fun ensureFullNext(player: ExoPlayer) {
+        val nextIndex = player.nextMediaItemIndex
+        if (nextIndex == C.INDEX_UNSET) return
+        for (offset in 0..1) {
+            val index = nextIndex + offset
+            if (index >= player.mediaItemCount) break
+            val item = player.getMediaItemAt(index)
+            val recorded = analysisFor(item)
+            if (recorded.provisionalHead && recorded.isUsable) {
+                AudioCache.forceFullPull(listOf(item.mediaId))
+                requestAnalysis(item, nextItemDurationMs(index, item))
+            }
+        }
     }
 
     /**

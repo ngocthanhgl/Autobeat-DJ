@@ -978,6 +978,7 @@ class PlaybackService : MediaLibraryService() {
                 if (exoPlayer.currentMediaItem?.mediaId == lastTimelineCurrentId) {
                     crossfade?.onQueueReordered()
                 }
+                updateAnalysisPriority(exoPlayer)
             }
         }
     }
@@ -2189,6 +2190,9 @@ class PlaybackService : MediaLibraryService() {
         // change that leaves this id in place is a reorder (Harmonic Sort
         // jump, drag, autoplay refill), not an advance.
         lastTimelineCurrentId = mediaItem?.mediaId
+        // The analyzer's priority lane follows the queue, not the track: the
+        // two ahead are what the next transitions will be planned from.
+        updateAnalysisPriority(exoPlayer)
 
         // A crossfade handoff never fires [formatListener] for the entering
         // track — [CrossfadeController] starts its decoder during ARMING,
@@ -4336,6 +4340,25 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
+     * Hands the analyzer the two tracks ahead of the playing one, by id.
+     * Returns them for callers that also want the bytes. Refreshed on every
+     * track change, reorder and mid-track pull: the analyzer serves these
+     * ids on its priority lane with full-size fetches instead of letting
+     * them queue behind the backlog as capped heads.
+     */
+    private fun updateAnalysisPriority(player: ExoPlayer): List<String> {
+        val nextIndex = player.nextMediaItemIndex
+        if (nextIndex == C.INDEX_UNSET) {
+            trackAnalyzer.priorityIds = emptySet()
+            return emptyList()
+        }
+        val ids = (nextIndex..minOf(nextIndex + 1, player.mediaItemCount - 1))
+            .map { player.getMediaItemAt(it).mediaId }
+        trackAnalyzer.priorityIds = ids.toSet()
+        return ids
+    }
+
+    /**
      * Hands the cache the queue ahead of the one playing: [AudioCache.QUEUE_DEPTH]
      * tracks is more than it does anything with, but it decides that, not this.
      */
@@ -4453,6 +4476,20 @@ class PlaybackService : MediaLibraryService() {
                     // repeat: it returns immediately unless the track is
                     // pending and nothing is already looking.
                     lookForBetterCopy(player)
+                    // Mid-track eager pull: the track-start full pull can
+                    // stall or fall short (retries, late-added tracks), and
+                    // the analyzer's whole-track pass cannot run until every
+                    // byte is on disk. Inside the last stretch — the later
+                    // of 60s and a quarter of the track — re-fire the pull
+                    // for the next two so a provisional next still goes full
+                    // before its transition. Deduped inside the cache.
+                    val duration = player.duration
+                    if (duration > 0) {
+                        val remaining = duration - player.currentPosition
+                        if (remaining < maxOf(60_000L, duration / 4)) {
+                            AudioCache.forceFullPull(updateAnalysisPriority(player))
+                        }
+                    }
                 }
                 delay(PROGRESS_SAMPLE_MS)
             }
