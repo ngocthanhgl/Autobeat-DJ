@@ -313,8 +313,6 @@ fun CanvasArtworkPlayer(
             view.captureAt(frameCapturePx, clipAspect, contentMode, alignPortraitTop)?.let(onFrameCaptured)
         }
     }
-    }
-
     val alpha by animateFloatAsState(
         targetValue = if (rendered) 1f else 0f,
         animationSpec = tween(durationMillis = 320),

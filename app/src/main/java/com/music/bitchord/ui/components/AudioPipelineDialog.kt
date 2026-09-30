@@ -461,7 +461,7 @@ fun AudioPipelineDialog(
                     }
 
                     // 4. DSP Stage
-                    val pcmFormat = outputStatus.dspFormat
+                    val pcmFormat = AudioOutputStatus.encodingLabel(outputStatus)
                     val dspRate = outputStatus.actualSampleRateHz ?: nerdStats?.sampleRateHz
                     val dspRateText = if (dspRate != null) "$dspRate Hz" else "ΓÇö"
                     val eqPresetText = if (eqEnabled) {
