@@ -117,11 +117,7 @@ private val SCRIM_COLOR = Color.Black.copy(alpha = 0.5f)
  *
  * A drawer off the bottom edge, as the rest of the app's sheets are: dark over
  * a scrim, a grab handle, grouped rows with generous radii, drag down to put it
- * away. No Material surfaces and no tonal elevation anywhere. The *arrangement*
- * is borrowed from vivi-music — the outputs, then volume — because it is the
- * right shape for the job; none of its Material styling is. Vivi folds all but
- * the active device behind a chevron and this does not: on a phone there are
- * usually two, so the disclosure costs a tap to reveal a single row.
+ * away. No Material surfaces and no tonal elevation anywhere.
  */
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable

@@ -368,9 +368,14 @@
     <string name="clear_name">Clear name</string>
     <string name="close_lyrics">Close lyrics</string>
     <string name="translate_lyrics">Translate lyrics</string>
+    <string name="romanize_lyrics">Romanize lyrics</string>
     <string name="show_original_lyrics">Show original lyrics</string>
     <string name="translating_lyrics_to">Translating to %1$s…</string>
     <string name="lyrics_translated_to">Translated to %1$s</string>
+    <string name="romanizing_lyrics">Romanizing lyrics…</string>
+    <string name="lyrics_romanized">Romanized pronunciation</string>
+    <string name="lyrics_already_romanized">These lyrics already use Latin characters</string>
+    <string name="lyrics_romanization_unavailable">Romanization is unavailable for these lyrics</string>
     <string name="lyrics_already_in_language">These lyrics are already in %1$s</string>
     <string name="lyrics_translation_unavailable">Translation is unavailable right now</string>
     <string name="translation_language">Translation language</string>
@@ -415,6 +420,13 @@
     <string name="instrumental">Instrumental</string>
     <string name="pause">Pause</string>
     <string name="lyrics_by">Lyrics by %1$s</string>
+    <string name="change_lyrics_provider">Change</string>
+    <string name="choose_lyrics_provider">Choose lyrics provider</string>
+    <string name="lyrics_provider_current">Current provider</string>
+    <string name="lyrics_provider_found">Lyrics found · Tap to use</string>
+    <string name="lyrics_provider_not_found">Lyrics not found</string>
+    <string name="lyrics_provider_fetching">Fetching lyrics…</string>
+    <string name="lyrics_provider_not_fetched">Tap to fetch</string>
     <string name="no_lyrics_found">No lyrics found</string>
     <string name="lyrics_saved_with_download">Lyrics saved with this download</string>
     <string name="shuffle_on">Shuffle on</string>
@@ -441,6 +453,7 @@
     <string name="data_saver">Data-Saver</string>
     <string name="medium_quality">Medium Quality</string>
     <string name="audio_pipeline">Audio Pipeline</string>
+    <string name="audio_pipeline_subtitle">Live signal path, top to bottom</string>
     <string name="pipeline_track_info">Track Info</string>
     <string name="pipeline_decoder">Decoder</string>
     <string name="pipeline_resampler">Resampler</string>
@@ -462,6 +475,9 @@
     <string name="pipeline_stereo_expand">Stereo Expand</string>
     <string name="pipeline_buffers">Buffers</string>
     <string name="pipeline_output_api">Output API</string>
+    <string name="pipeline_loudness_gain">Loudness Gain</string>
+    <string name="pipeline_loudness_measured">Loudness Measured</string>
+    <string name="pipeline_bit_exact">Bit-Exact</string>
     <string name="pipeline_device_name">Device Name</string>
     <string name="bit_depth">%1$d-bit</string>
     <string name="mono">Mono</string>
