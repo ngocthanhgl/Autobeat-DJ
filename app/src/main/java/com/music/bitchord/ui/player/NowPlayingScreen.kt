@@ -3321,6 +3321,10 @@ fun NowPlayingScreen(
                     val translateShown = lyricsControlsOpen
                     val translateFade by animateFloatAsState(
                         targetValue = if (translateShown) 1f else 0f,
+                        animationSpec = tween(if (translateShown) 220 else 160),
+                        label = "translateFade",
+                    )
+                    if (translateFade > 0.01f) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
@@ -3333,9 +3337,7 @@ fun NowPlayingScreen(
                                 onClick = toggleRomanization,
                             )
                         }
-                        animationSpec = tween(if (translateShown) 220 else 160),
-                        label = "translateFade",
-                    )
+                    }
                     if (translateFade > 0.01f) {
                         Box(
                             modifier = Modifier
