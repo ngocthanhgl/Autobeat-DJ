@@ -2670,17 +2670,18 @@ class CrossfadeController(
             } else {
                 0.75f
             }
-            // DJ-only: drive the PCM brake processor for audible reverse chirp
-            // (ExoPlayer rate dive alone is forward-only and too subtle).
+            // DJ-only: drive the PCM brake processor for a real spinback
+            // sweep (ExoPlayer rate dive alone is forward-only and too
+            // subtle). The phase is set, never re-armed: the processor walks
+            // its tap ring backwards continuously across the window, so every
+            // tick just advances the same sweep instead of restarting it.
             brakeDiveFilters.setBackspin(render.backspin)
             if (render.backspin && outProgress >= windowStart) {
                 val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
-                // Energy fix P1-2: real DJs hold the fader through a spin-back —
-                // only the pitch dives. Driving full t stacked a cubic gain decay
-                // (+ rate dive + LP sweep) for ~-34 dB of level collapse over the
-                // window. Cap the brake amount so the reverse chirp/pitch dive
-                // still reads but the level only dips ~30% instead of dying.
-                brakeDiveFilters.outgoing(t * 0.3f)
+                // Energy fix P1-2 still holds: real DJs keep the fader up
+                // through a spin-back, so no forward duck stacks onto the
+                // sweep — the spin's own envelope owns the level.
+                brakeDiveFilters.spinTo(t)
             } else if (render.brake && outProgress >= windowStart) {
                 val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
                 brakeDiveFilters.outgoing(t * 0.85f)

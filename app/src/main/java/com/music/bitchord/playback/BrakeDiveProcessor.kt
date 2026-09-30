@@ -9,14 +9,22 @@ import java.nio.ByteOrder
 import kotlin.math.min
 
 /**
- * DJ-only brake/dive effect. Applies a smooth volume reduction
- * with a quadratic dive curve to the outgoing track during transitions.
+ * DJ-only brake/dive effect. Two voicings:
  *
- * The magnitude is configurable (0 = no brake, 1 = full stop).
- * The dive curve: gain = 1 - brakeAmount * t^2 * BRAKE_DIVE_FACTOR,
- * where t runs from 0 to 1 over the brake window (64 frames).
+ * Plain brake: a direct gain duck driven by the aimed amount (the controller
+ * ramps it ~30x/s, which is the smoothing — no per-buffer glide needed).
  *
- * Processes 16-bit PCM buffers in-place, exactly like [EchoSendProcessor].
+ * Backspin: a vinyl spinback. The controller sets the spin phase once per
+ * tick across the 1s window (never re-armed mid-window), and this processor
+ * reads its tap ring backwards continuously — reverse speed 0.5x → 4x with
+ * linear interpolation, level held through the first half then diving. That
+ * is the hand dragging the record back, not a power-off.
+ *
+ * The tap ring keeps the last 1.5s as float mono-mixed per channel, so both
+ * PCM-16 and FLOAT_32 chains spin (the old Short ring bowed out on float,
+ * which is what most modern outputs negotiate).
+ *
+ * Processes buffers in place, exactly like [EchoSendProcessor].
  */
 @UnstableApi
 class BrakeDiveProcessor : BaseAudioProcessor() {
@@ -24,60 +32,100 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
     companion object {
         const val MAX_BRAKE_AMOUNT = 1.0f
         const val BRAKE_DIVE_FACTOR = 0.97f
-        const val GLIDE_FRAMES = 64
-        const val GLIDE_RATE = 0.05f
+        // Reverse sweep bounds across the spin window, in x playback rate.
+        const val SPIN_START_SPEED = 0.5f
+        const val SPIN_END_SPEED = 4.0f
     }
 
     @Volatile
     private var targetBrakeAmount: Float = 0f
     @Volatile
     private var isBackspin = false
+    // Spin phase 0..1 across the window, set by the controller once per tick.
+    // Negative = not spinning. Never stepped here: the controller owns the
+    // clock, so a tick cannot restart the sweep mid-window (that re-arm is
+    // what used to chop the reverse into sub-millisecond blips).
+    @Volatile
+    private var spinPhase: Float = -1f
 
+    private var encoding = C.ENCODING_INVALID
     private var channelCount = 0
     private var bytesPerFrame = 0
-    // DJ-only backspin ring — 1.5s @48k stereo = 144k shorts, holds last second for reverse chirp.
-    private var ring = ShortArray(0)
+    private var sampleRate = 48000
+    // Tap ring, float interleaved, newest at ringPos. 1.5s covers the 1s spin
+    // window with half a second of run-up behind the hand hitting the record.
+    private var ring = FloatArray(0)
+    private var ringFrames = 0
     private var ringPos = 0
     private var ringFilled = 0
-    // Full-audit F6: start settled; the dive window is armed by setBrake, and
-    // isActive() only looks at the aimed target, so the init value never
-    // keeps the processor in the chain by itself.
-    private var glideCounter = 1f
+    // Reverse cursor in frames (fractional — interpolated below). Re-seated
+    // to the newest tap whenever a spin starts, then walks backwards for the
+    // whole window without ever jumping.
+    private var reversePos = 0f
 
     /** Aims the brake. [amount] 0..1 where 1 = full stop. */
     fun setBrake(amount: Float) {
         targetBrakeAmount = amount.coerceIn(0f, MAX_BRAKE_AMOUNT)
-        // (Re)arming here — not in onFlush — so a fresh/seeked processor
-        // stays out of the chain until a real dive is aimed.
-        if (targetBrakeAmount > 0f) glideCounter = 0f
     }
 
-    fun setBackspin(enabled: Boolean) { isBackspin = enabled }
+    fun setBackspin(enabled: Boolean) {
+        if (enabled == isBackspin) return
+        isBackspin = enabled
+        if (enabled) {
+            spinPhase = -1f
+            reversePos = -1f
+        } else {
+            spinPhase = -1f
+        }
+    }
+
+    /** Advances the spinback sweep. [phase] 0..1 across the spin window. */
+    fun spinTo(phase: Float) {
+        val p = phase.coerceIn(0f, 1f)
+        if (spinPhase < 0f) {
+            // Spin start: seat the cursor on the newest tapped frame so the
+            // rewind begins exactly where the forward play was.
+            reversePos = ringPos.toFloat()
+        }
+        spinPhase = p
+    }
 
     /** Rides the brake back to zero so the track resumes normal speed. */
-    fun ride() { setBrake(0f); isBackspin = false }
+    fun ride() {
+        setBrake(0f)
+        isBackspin = false
+        spinPhase = -1f
+    }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount < 1) {
+        if ((inputAudioFormat.encoding != C.ENCODING_PCM_16BIT &&
+                inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT) ||
+            inputAudioFormat.channelCount < 1
+        ) {
             return AudioProcessor.AudioFormat.NOT_SET
         }
+        encoding = inputAudioFormat.encoding
         channelCount = inputAudioFormat.channelCount
-        bytesPerFrame = 2 * channelCount
-        val ringFrames = (inputAudioFormat.sampleRate * 1.5).toInt().coerceAtLeast(48000)
-        ring = ShortArray(ringFrames * channelCount)
+        sampleRate = inputAudioFormat.sampleRate
+        bytesPerFrame = (if (encoding == C.ENCODING_PCM_FLOAT) 4 else 2) * channelCount
+        ringFrames = (sampleRate * 1.5).toInt().coerceAtLeast(48000)
+        ring = FloatArray(ringFrames * channelCount)
         ringPos = 0
         ringFilled = 0
+        spinPhase = -1f
         return inputAudioFormat
     }
 
     override fun onFlush() {
-        glideCounter = 0f
+        ringPos = 0
+        ringFilled = 0
+        spinPhase = -1f
     }
 
     override fun onReset() {
         targetBrakeAmount = 0f
         isBackspin = false
-        glideCounter = 0f
+        spinPhase = -1f
         ringPos = 0
         ringFilled = 0
     }
@@ -88,83 +136,113 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
         if (frameCount == 0) return
         val outputBuffer = replaceOutputBuffer(frameCount * bytesPerFrame)
 
-        // Always tap input into ring for reverse read later (DJ-only, cheap copy).
-        if (ring.isNotEmpty()) {
-            val pos = inputBuffer.position()
-            for (i in 0 until frameCount * channelCount) {
-                ring[ringPos] = inputBuffer.getShort(pos + i * 2)
-                ringPos = (ringPos + 1) % ring.size
-            }
-            ringFilled = min(ringFilled + frameCount * channelCount, ring.size)
+        tapRing(inputBuffer, frameCount)
+
+        val spinning = isBackspin && spinPhase >= 0f && ringFilled > channelCount * 256
+        if (spinning) {
+            renderSpin(outputBuffer, frameCount)
+            // Still consume the input forward to keep the pipeline clock —
+            // the deck keeps playing under the hand; only what is heard runs
+            // backwards.
+            inputBuffer.position(inputBuffer.position() + frameCount * bytesPerFrame)
+            outputBuffer.flip()
+            return
         }
 
-        val active = glideCounter < 1f && targetBrakeAmount > 0f
-        if (!active) {
+        val amount = targetBrakeAmount
+        if (amount <= 0f) {
             outputBuffer.put(inputBuffer)
             outputBuffer.flip()
             return
         }
-
         inputBuffer.order(ByteOrder.nativeOrder())
         outputBuffer.order(ByteOrder.nativeOrder())
-
-        // DJ-only backspin: after halfway through glide (t>0.5) read ring backwards
-        // with accelerating reverse speed (0.5x -> 3.5x) so the ear hears a vinyl spinback chirp
-        // instead of a forward slowdown. Before halfway, keep the forward duck so the hand hits the record.
-        val backspinNow = isBackspin && glideCounter > 0.45f && ringFilled > channelCount * 256
-        if (backspinNow) {
-            var reverseIdx = (ringPos - channelCount + ring.size) % ring.size
-            var stepAcc = 0f
-            for (i in 0 until frameCount) {
-                val t = glideCounter.coerceIn(0f, 1f)
-                // reverse speed ramps 0.8 -> 3.5 over the spin
-                val revSpeed = 0.8f + t * 2.7f
-                val gain = (1f - targetBrakeAmount * t * BRAKE_DIVE_FACTOR * 0.55f).coerceIn(0f, 1f)
-                stepAcc += revSpeed
-                val steps = stepAcc.toInt()
-                stepAcc -= steps
-                repeat(steps) { reverseIdx = (reverseIdx - channelCount + ring.size) % ring.size }
-                for (ch in 0 until channelCount) {
-                    val idx = (reverseIdx + ch + ring.size) % ring.size
-                    val s = ring[idx].toFloat() * gain
-                    outputBuffer.putShort(clampToShort(s))
+        // Plain brake: one direct duck. The controller ramps [amount] every
+        // tick, so the curve across the window comes from the caller.
+        val brakeFactor = 1f - amount * BRAKE_DIVE_FACTOR
+        if (encoding == C.ENCODING_PCM_FLOAT) {
+            repeat(frameCount) {
+                repeat(channelCount) {
+                    outputBuffer.putFloat((inputBuffer.float * brakeFactor).coerceIn(-1f, 1f))
                 }
-                // still consume input forward (keep pipeline clock), just output reversed ring
-                for (ch in 0 until channelCount) inputBuffer.short
-                glideCounter = (glideCounter + GLIDE_RATE * 0.7f).coerceAtMost(1f)
             }
-            outputBuffer.flip()
-            return
-        }
-
-        var remaining = frameCount
-        while (remaining > 0) {
-            val block = min(remaining, GLIDE_FRAMES)
-            remaining -= block
-            repeat(block) {
-                val t = glideCounter.coerceIn(0f, 1f)
-                val brakeFactor = 1f - targetBrakeAmount * t * t * BRAKE_DIVE_FACTOR
-                for (ch in 0 until channelCount) {
-                    val sample = inputBuffer.short.toFloat()
-                    outputBuffer.putShort(clampToShort(sample * brakeFactor))
+        } else {
+            repeat(frameCount) {
+                repeat(channelCount) {
+                    outputBuffer.putShort(clampToShort(inputBuffer.short.toFloat() * brakeFactor))
                 }
-                glideCounter += GLIDE_RATE
             }
         }
         outputBuffer.flip()
     }
 
+    /** Copies the incoming frames into the tap ring as float. Cheap, always on. */
+    private fun tapRing(inputBuffer: ByteBuffer, frameCount: Int) {
+        if (ring.isEmpty()) return
+        val pos = inputBuffer.position()
+        val order = inputBuffer.order()
+        inputBuffer.order(ByteOrder.nativeOrder())
+        if (encoding == C.ENCODING_PCM_FLOAT) {
+            for (i in 0 until frameCount * channelCount) {
+                ring[ringPos] = inputBuffer.getFloat(pos + i * 4).coerceIn(-1f, 1f)
+                ringPos = (ringPos + 1) % ring.size
+            }
+        } else {
+            for (i in 0 until frameCount * channelCount) {
+                ring[ringPos] = (inputBuffer.getShort(pos + i * 2).toFloat() / 32768f).coerceIn(-1f, 1f)
+                ringPos = (ringPos + 1) % ring.size
+            }
+        }
+        inputBuffer.order(order)
+        ringFilled = min(ringFilled + frameCount * channelCount, ring.size)
+    }
+
+    /**
+     * The spinback: walk the ring backwards at an accelerating reverse rate
+     * with linear interpolation between frames, so the ear hears one
+     * continuous rewind sweep instead of stepped chirps. Level holds through
+     * the first half (a real hand keeps the fader up while it drags) then
+     * dives into the cut.
+     */
+    private fun renderSpin(outputBuffer: ByteBuffer, frameCount: Int) {
+        val phase = spinPhase.coerceIn(0f, 1f)
+        // 0.5x -> 4x across the window: the drag starts under the music and
+        // ends whipping past it.
+        val revSpeed = SPIN_START_SPEED + phase * (SPIN_END_SPEED - SPIN_START_SPEED)
+        // Hold ~80% through the first half, dive to ~10% at the cut.
+        val gain = if (phase < 0.5f) 0.8f else (0.8f * (1f - (phase - 0.5f) * 1.75f)).coerceAtLeast(0.1f)
+        outputBuffer.order(ByteOrder.nativeOrder())
+        repeat(frameCount) {
+            reversePos -= revSpeed
+            for (ch in 0 until channelCount) {
+                val s = ringAt(reversePos, ch) * gain
+                if (encoding == C.ENCODING_PCM_FLOAT) {
+                    outputBuffer.putFloat(s.coerceIn(-1f, 1f))
+                } else {
+                    outputBuffer.putShort(clampToShort(s * 32767f))
+                }
+            }
+        }
+    }
+
+    /** Interpolated tap-ring read at a fractional frame position, channel [ch]. */
+    private fun ringAt(framePos: Float, ch: Int): Float {
+        if (ring.isEmpty()) return 0f
+        val size = ring.size
+        fun at(frame: Int): Float {
+            val f = ((frame % ringFrames) + ringFrames) % ringFrames
+            return ring[f * channelCount + ch.coerceIn(0, channelCount - 1)]
+        }
+        val f0 = kotlin.math.floor(framePos).toInt()
+        val frac = (framePos - f0).coerceIn(0f, 1f)
+        return at(f0) + (at(f0 + 1) - at(f0)) * frac
+    }
+
     private fun clampToShort(value: Float): Short =
         value.coerceIn(Short.MIN_VALUE.toFloat(), Short.MAX_VALUE.toFloat()).toInt().toShort()
 
-    override fun getOutput(): ByteBuffer {
-        return ByteBuffer.allocateDirect(0)
-    }
-
-    // Full-audit F6: active purely on aimed target. The old glide clause kept
-    // a fresh/seeked processor in the chain running a pointless x1.0 copy on
-    // every PCM-16 playback (stock included); the dive window is armed by
-    // setBrake and still gates inside queueInput.
-    override fun isActive(): Boolean = targetBrakeAmount > 0f
-
-    }
+    // Full-audit F6: active purely on aimed target or an armed spin. The old
+    // glide clause kept a fresh/seeked processor in the chain running a
+    // pointless x1.0 copy on every PCM-16 playback (stock included).
+    override fun isActive(): Boolean = targetBrakeAmount > 0f || (isBackspin && spinPhase >= 0f)
+}
