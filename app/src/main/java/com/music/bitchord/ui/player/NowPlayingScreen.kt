@@ -131,6 +131,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -210,6 +211,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.Velocity
@@ -254,6 +256,7 @@ import com.music.bitchord.data.lyrics.LyricsTranslation
 import com.music.bitchord.data.lyrics.translationLanguageName
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.AudioQuality
+import com.music.bitchord.data.settings.LastPlayerScreen
 import com.music.bitchord.data.model.LikeStatus
 import com.music.bitchord.data.model.PlaybackSourceType
 import com.music.bitchord.data.model.PLAYER_ART_PX
@@ -865,6 +868,43 @@ private fun scrollLead(lines: List<LyricLine>, positionMs: Long): Long {
  */
 private val CONTROLS_SCROLL_SLOP = 20.dp
 
+/**
+ * Shared phone-panel gesture: moving forward through content hides the half
+ * player, while reversing brings it back. Only direct finger input counts, so
+ * the lyrics auto-follow and the queue's current-track jump cannot move chrome.
+ */
+@Composable
+internal fun rememberPlayerControlsOnScroll(
+    enabled: Boolean = true,
+    onReveal: () -> Unit,
+    onHide: () -> Unit,
+): NestedScrollConnection {
+    val controlsSlopPx = with(LocalDensity.current) { CONTROLS_SCROLL_SLOP.toPx() }
+    val revealControls by rememberUpdatedState(onReveal)
+    val hideControls by rememberUpdatedState(onHide)
+    return remember(enabled, controlsSlopPx) {
+        object : NestedScrollConnection {
+            private var travel = 0f
+
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (enabled && source == NestedScrollSource.UserInput && available.y != 0f) {
+                    if (travel != 0f && (travel > 0f) != (available.y > 0f)) travel = 0f
+                    travel += available.y
+                    // Finger travelling up is the list going forward.
+                    if (travel <= -controlsSlopPx) {
+                        travel = 0f
+                        hideControls()
+                    } else if (travel >= controlsSlopPx) {
+                        travel = 0f
+                        revealControls()
+                    }
+                }
+                return Offset.Zero
+            }
+        }
+    }
+}
+
 /** How long the player stands under the lyrics untouched before standing down. */
 private const val LYRICS_CONTROLS_IDLE_MS = 5_000L
 
@@ -1136,6 +1176,7 @@ fun NowPlayingScreen(
     // clip's own loop makes that worth guarding separately from a still image.
     val canvasAllowedNow = canvasEnabled && (meteredConnection != true || canvasOverCellular)
     var canvas by remember(song.videoId) { mutableStateOf<CanvasArtwork?>(null) }
+    var canvasAspect by remember(canvas) { mutableFloatStateOf(0f) }
     // Whether the clip actually has a frame on screen right now, and one of
     // them — used to blow the sleeve out to the full-bleed hero treatment and
     // to re-tint the backdrop off the clip's own colours rather than the
@@ -1162,7 +1203,6 @@ fun NowPlayingScreen(
     // a pixel readback of its own on every track change, and the two answer the
     // same picture in two different ways, so whichever is not on screen is pure
     // cost — the legacy path pays [rememberArtworkColors] instead.
-    val artMesh = if (legacyMesh) null else rememberArtworkMesh(song.thumbnailUrl, canvasFrame, ART_PX)
     // Asked of every clip, Spotify's Canvas and every other source alike — see
     // CanvasArtworkPlayer's refreshFrameEveryMs. A clip's own colours move as
     // it plays regardless of who published it, and the backdrop should follow.
@@ -1196,8 +1236,17 @@ fun NowPlayingScreen(
     var scrubbing by remember { mutableStateOf(false) }
     var scrubValue by remember { mutableFloatStateOf(0f) }
     // The queue lives inside the player, Apple-style, rather than in a sheet.
-    var queueOpen by remember { mutableStateOf(false) }
-    var lyricsOpen by remember { mutableStateOf(false) }
+    // Read once when this expanded-player instance is created. Every change is
+    // written below, so reopening the player (and a process restart) returns to
+    // the same surface on phones and tablets without making this UI state a
+    // continuously collected setting.
+    val restoredPlayerScreen = remember { AppSettings.lastPlayerScreen.value }
+    var queueOpen by remember {
+        mutableStateOf(restoredPlayerScreen == LastPlayerScreen.QUEUE)
+    }
+    var lyricsOpen by remember {
+        mutableStateOf(restoredPlayerScreen == LastPlayerScreen.LYRICS)
+    }
     // Whether the lyrics or queue list is actively mid-scroll. The player's own
     // swipe gestures — skip-by-drag and the dismiss band — are suppressed for
     // as long as either is true, so a scroll that grazes past a list's edge
@@ -1209,7 +1258,22 @@ fun NowPlayingScreen(
     LaunchedEffect(lyricsOpen) { if (!lyricsOpen) lyricsScrolling = false }
     LaunchedEffect(queueOpen) { if (!queueOpen) queueScrolling = false }
     val panelScrolling = lyricsScrolling || queueScrolling
-    var lyricsControlsOpen by remember { mutableStateOf(false) }
+    var lyricsControlsOpen by remember {
+        mutableStateOf(restoredPlayerScreen == LastPlayerScreen.LYRICS)
+    }
+    // Phone only: queue scrolling can dismiss the half player below it, and a
+    // fresh visit always starts with that half player present.
+    var queueControlsOpen by remember { mutableStateOf(true) }
+    LaunchedEffect(lyricsOpen, queueOpen) {
+        AppSettings.setLastPlayerScreen(
+            when {
+                lyricsOpen -> LastPlayerScreen.LYRICS
+                queueOpen -> LastPlayerScreen.QUEUE
+                else -> LastPlayerScreen.MAIN
+            },
+        )
+        if (queueOpen) queueControlsOpen = true
+    }
     // Change the panel and its controls in the same snapshot. Driving the
     // controls from a LaunchedEffect left one composed frame where lyrics were
     // open but the half-player was not, so every trip into lyrics briefly
@@ -1223,8 +1287,17 @@ fun NowPlayingScreen(
         lyricsControlsOpen = false
         lyricsOpen = false
     }
+    // Declared up here so [toggleQueue] can snap it; the settle animation that
+    // also drives it stays where the sleeve gesture lives below.
+    val queueSlide = remember { mutableFloatStateOf(0f) }
     val toggleLyrics: () -> Unit = {
         if (lyricsOpen) closeLyrics() else openLyrics()
+    }
+    val toggleQueue: () -> Unit = {
+        val opening = !queueOpen
+        if (opening && lyricsOpen) queueSlide.floatValue = 1f
+        queueOpen = opening
+        if (opening) closeLyrics()
     }
     val reduceTranslationMotion by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
     val configuredLocale = AppCompatDelegate.getApplicationLocales().get(0)?.toLanguageTag()
@@ -1561,7 +1634,7 @@ fun NowPlayingScreen(
     // [queueOpen] cannot be pushed around mid-flight by a drag — and a drag that
     // could only move the *target* would have nothing to show for itself until
     // it was released, then jump from wherever the animation had got to.
-    val queueSlide = remember { mutableFloatStateOf(0f) }
+    // ([queueSlide] itself is declared above, next to [toggleQueue].)
     val queueProgress = queueSlide.floatValue
     // Whether a finger is on the sleeve right now. Parks the settle below rather
     // than leaving the two to write the same value on alternate frames.
@@ -1871,6 +1944,11 @@ fun NowPlayingScreen(
     // the clip goes, instead of a frame later with the sleeve behind it still
     // transparent and no artwork anywhere.
     val heroClip = canvas?.takeIf { heroMode && p < 0.5f }
+    val canvasFirstPortrait = heroClip != null && canvasAspect > 0f && canvasAspect < 1f
+    // Portrait clips always use the existing artwork mesh, even if the user
+    // selected the legacy backdrop for ordinary artwork.
+    val artMesh = if (legacyMesh && !canvasFirstPortrait) null else
+        key(song.videoId) { rememberArtworkMesh(song.thumbnailUrl, canvasFrame, ART_PX) }
     // Whether the banner is the presentation at all: full-bleed is on, and there
     // is something to blow out. The collapse is deliberately *not* part of this
     // — see [heroVisible].
@@ -1904,6 +1982,20 @@ fun NowPlayingScreen(
     // own geometry is known. Zero until the first measure, which is fine: there
     // is nothing to show that early either.
     var heroHeight by remember { mutableStateOf(0.dp) }
+    var playerBounds by remember { mutableStateOf(IntSize.Zero) }
+    // The bottom of a top-aligned, contained clip in the full-player view.
+    // Use measured pixels and the decoded display aspect, never screen constants.
+    val renderedCanvasBottom = if (canvasFirstPortrait && playerBounds.width > 0 && playerBounds.height > 0) {
+        val viewAspect = playerBounds.width.toFloat() / playerBounds.height
+        val videoHeight = if (canvasAspect >= viewAspect) playerBounds.width / canvasAspect
+            else playerBounds.height.toFloat()
+        with(density) { videoHeight.toDp() }
+    } else 0.dp
+    // Match the old hero's fade height in physical pixels, not its much larger
+    // percentage of a portrait video. The mask ends at the real video bottom.
+    val canvasFirstFadeFraction = if (renderedCanvasBottom > 0.dp) {
+        (heroHeight.value * HERO_FADE_FRACTION / renderedCanvasBottom.value).coerceIn(0f, 1f)
+    } else 0f
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     // What sits between the status bar and the artwork: the drag strip in a
     // sheet, plain padding in a pane. Read in three places — the strip itself,
@@ -2198,10 +2290,7 @@ fun NowPlayingScreen(
             lyricsOpen = lyricsOpen,
             queueOpen = queueOpen,
             onToggleLyrics = toggleLyrics,
-            onToggleQueue = {
-                queueOpen = !queueOpen
-                if (queueOpen) closeLyrics()
-            },
+            onToggleQueue = toggleQueue,
             showQueue = widePanelIsQueue,
             statusContent = wideStatusContent,
             lyricsContent = wideLyricsContent,
@@ -2250,7 +2339,7 @@ fun NowPlayingScreen(
         return
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize().onSizeChanged { playerBounds = it }.background(Color.Black)) {
         // Anchored to the sleeve's bottom edge, so the screen carries on in the
         // colours the artwork ended in rather than in a quantiser's idea of what
         // the artwork was about. Position ticks recompose this screen twice a
@@ -2262,7 +2351,7 @@ fun NowPlayingScreen(
         // the anchor for a blurred layer, and moving it would re-blur the whole
         // screen on every frame of the drag. Above it the mesh holds one colour,
         // so a seam left behind a collapsed sleeve shows nothing at all.
-        if (legacyMesh) {
+        if (legacyMesh && !canvasFirstPortrait) {
             // v1.5's backdrop, restored verbatim: no seam, because the blobs
             // are not anchored to anything on screen — they fill the player and
             // the artwork simply sits on top of them. Keyed on the track, so
@@ -2277,7 +2366,7 @@ fun NowPlayingScreen(
         } else {
             ArtworkMeshBackdrop(
                 mesh = artMesh,
-                seam = if (heroMode) heroHeight else 0.dp,
+                seam = if (canvasFirstPortrait) renderedCanvasBottom else if (heroMode) heroHeight else 0.dp,
             )
         }
 
@@ -2362,29 +2451,39 @@ fun NowPlayingScreen(
                 )
             }
 
-            // Motion artwork over it, in the same frame.
-            //
-            // Always composed while there's a clip to play, never gated on
-            // [heroVisible]: the clip has to be mounted and decoding *before*
-            // it can report the first frame that raises heroT in the first place.
-            if (heroMode) {
-                heroClip?.let { clip ->
-                    CanvasArtworkPlayer(
-                        canvas = clip,
-                        pausedForTransition = p > 0f,
-                        isPlaying = isPlaying,
-                        onRenderedChanged = { canvasRendered = it },
-                        onFrameCaptured = { canvasFrame = it },
-                        refreshFrameEveryMs = meshRefreshMs,
-                        onCoverChanged = { canvasCover.floatValue = it },
-                        bottomFade = HERO_FADE_FRACTION,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .fillMaxWidth()
-                            .height(heroHeight)
-                            .hazeSource(playerHaze),
-                    )
-                }
+            }
+        }
+
+        // Mount once, behind the controls. A known portrait aspect changes the
+        // invisible view to full-player bounds before its first frame is shown.
+        if (heroMode && heroHeight > 0.dp) {
+            heroClip?.let { clip ->
+                CanvasArtworkPlayer(
+                    canvas = clip,
+                    pausedForTransition = p > 0f,
+                    isPlaying = isPlaying,
+                    contentMode = CanvasContentMode.FIT_PORTRAIT,
+                    alignPortraitTop = canvasFirstPortrait,
+                    onAspectRatioChanged = { canvasAspect = it },
+                    portraitRevealBounds = playerBounds,
+                    presentationAlpha = if (canvasFirstPortrait) (1f - 2f * p).coerceIn(0f, 1f) else 1f,
+                    onRenderedChanged = { canvasRendered = it },
+                    onFrameCaptured = { canvasFrame = it },
+                    refreshFrameEveryMs = meshRefreshMs,
+                    onCoverChanged = { canvasCover.floatValue = it },
+                    bottomFade = if (canvasFirstPortrait) canvasFirstFadeFraction else HERO_FADE_FRACTION,
+                    bottomFadeEndPx = if (canvasFirstPortrait) with(density) { renderedCanvasBottom.toPx() }
+                        else null,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .then(
+                            if (canvasFirstPortrait) Modifier.fillMaxSize()
+                            else Modifier.fillMaxWidth().height(heroHeight),
+                        )
+                        .hazeSource(playerHaze),
+                )
+            }
+        }
             }
 
             // The clock, the signal bars and the drag handle are all white, and
@@ -2408,6 +2507,22 @@ fun NowPlayingScreen(
                         ),
                 )
             }
+        }
+
+        if (canvasFirstPortrait && canvasRendered) {
+            // The image remains visible through the controls; a plain scrim
+            // protects text and touch targets without erasing the video.
+            Box(
+                Modifier.matchParentSize()
+                    .graphicsLayer { alpha = canvasCover.floatValue }
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.40f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = 0.70f),
+                        ),
+                    ),
+            )
         }
 
         Column(
@@ -3273,6 +3388,9 @@ fun NowPlayingScreen(
                             onMove = onMoveInQueue,
                             onClear = onClearQueue,
                             onScrollingChange = { queueScrolling = it },
+                            collapsePlayerOnScroll = true,
+                            onRevealPlayer = { queueControlsOpen = true },
+                            onHidePlayer = { queueControlsOpen = false },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -3285,7 +3403,8 @@ fun NowPlayingScreen(
             // which is what keeps this row of controls in the same place on
             // every screen instead of being shoved off the bottom of a tall one.
             AnimatedVisibility(
-                visible = !lyricsOpen || lyricsControlsOpen,
+                visible = (!lyricsOpen || lyricsControlsOpen) &&
+                    (!queueOpen || queueControlsOpen),
                 // Fade at the final position; never animate the controls' height.
                 enter = fadeIn(tween(220)),
                 exit = fadeOut(tween(160)),
@@ -3720,10 +3839,7 @@ fun NowPlayingScreen(
                 BottomGlyph(
                     icon = BitChordIcons.Queue,
                     contentDescription = stringResource(R.string.up_next),
-                    onClick = {
-                        closeLyrics()
-                        queueOpen = !queueOpen
-                    },
+                    onClick = toggleQueue,
                     highlighted = queueOpen,
                     haptic = if (queueOpen) Haptic.Tap else Haptic.Expand,
                 )
@@ -7083,6 +7199,10 @@ private fun InlineQueue(
     onMove: (Int, Int) -> Unit,
     onClear: () -> Unit,
     onScrollingChange: (Boolean) -> Unit = {},
+    /** Phone only: let queue scrolling dismiss/restore the lower half player. */
+    collapsePlayerOnScroll: Boolean = false,
+    onRevealPlayer: () -> Unit = {},
+    onHidePlayer: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -7090,6 +7210,11 @@ private fun InlineQueue(
         snapshotFlow { listState.isScrollInProgress }.collect(onScrollingChange)
     }
     val keepScroll = remember(listState) { keepScrollInList(listState) }
+    val controlsOnScroll = rememberPlayerControlsOnScroll(
+        enabled = collapsePlayerOnScroll,
+        onReveal = onRevealPlayer,
+        onHide = onHidePlayer,
+    )
     // Where AutoPlay's tracks start. The queue is kept with them last, so this
     // is one boundary rather than a category to test row by row.
     val autoplayStart = remember(queue, currentIndex) {
@@ -7198,6 +7323,10 @@ private fun InlineQueue(
                 // Without this the sheet treats the list's leftover scroll as a
                 // drag on itself and slides the whole player away.
                 .nestedScroll(keepScroll)
+                .then(
+                    if (collapsePlayerOnScroll) Modifier.nestedScroll(controlsOnScroll)
+                    else Modifier,
+                )
                 .fadingEdges(),
             contentPadding = PaddingValues(horizontal = PLAYER_GUTTER),
         ) {
