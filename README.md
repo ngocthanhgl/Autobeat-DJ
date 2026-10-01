@@ -67,7 +67,7 @@ One of the main goals of Autobeat is **fast AI analysis without keeping the devi
 
 ## Track Analysis
 
-| | Stock player | Autobeat |
+| | Bitchord | Autobeat |
 |---|---:|---:|
 | Track analysis | Up to ~1 minute | **~5–6 seconds** |
 | Primary focus | General playback | **DJ analysis** |
