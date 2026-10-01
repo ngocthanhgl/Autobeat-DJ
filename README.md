@@ -3,7 +3,7 @@
 <br>
 <br>
 
-<img src="autobeat-logo.svg" alt="Autobeat" width="180">
+<img src="autobeat-logo.svg" alt="Autobeat" width="300">
 
 # Autobeat
 
@@ -169,12 +169,3 @@ See [`LICENSE`](LICENSE) for the full license text.
 
 ---
 
-<div align="center">
-
-<br>
-
-### Autobeat
-
-**AI-powered mixing. Built for mobile.**
-
-<br
