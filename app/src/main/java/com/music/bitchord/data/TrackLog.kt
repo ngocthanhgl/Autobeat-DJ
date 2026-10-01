@@ -1,5 +1,6 @@
 package com.music.bitchord.data
 
+import android.content.Context
 import android.os.Build
 import android.util.Log
 import com.music.bitchord.BuildConfig
@@ -8,10 +9,13 @@ import com.music.bitchord.data.sources.SourceResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
+import kotlin.concurrent.thread
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -126,7 +130,7 @@ object TrackLog {
      */
     fun about(id: String?): CoroutineContext = working.asContextElement(id)
 
-    private class Line(val at: Long, val level: Char, val text: String, val track: String?)
+    private class Line(val at: Long, val level: Char, val text: String, val track: String?, var repeats: Int = 1)
 
     private val lines = ArrayDeque<Line>()
 
@@ -138,6 +142,10 @@ object TrackLog {
      * carrying a search response is worth several hundred ordinary lines, and a
      * limit that counts them the same either wastes memory or throws away the
      * history that matters.
+     *
+     * Consecutive repeats collapse into one line with a count — a planner
+     * re-logging the same verdict every 250 ms tick would otherwise drown the
+     * paste in dozens of identical lines, and the file below in megabytes.
      */
     private fun record(level: Char, message: String, about: String?) {
         val text = if (message.length > MAX_LINE_CHARS) {
@@ -145,13 +153,130 @@ object TrackLog {
         } else {
             message
         }
+        val now = System.currentTimeMillis()
         synchronized(lines) {
-            lines.addLast(Line(System.currentTimeMillis(), level, text, about))
-            held += text.length
-            while (held > MAX_HELD_CHARS && lines.isNotEmpty()) {
-                held -= lines.removeFirst().text.length
+            val last = lines.lastOrNull()
+            if (last != null && last.level == level && last.text == text && last.track == about) {
+                last.repeats++
+            } else {
+                lines.addLast(Line(now, level, text, about))
+                held += text.length
+                while (held > MAX_HELD_CHARS && lines.isNotEmpty()) {
+                    held -= lines.removeFirst().text.length
+                }
             }
         }
+        if (sessionStarted) fileQueue.offer(FLine(now, level, text, about))
+    }
+
+    // ── Session file ──────────────────────────────────────────────────────────
+
+    /**
+     * Every line mirrored to disk, from process start to death, so a bug that
+     * needs a restart to escape still has its story afterwards. The in-memory
+     * [lines] above are bounded and read back per-track; this file is neither —
+     * it is the whole session in order, which is what a freeze or a silence
+     * that only reproduces once an hour needs.
+     *
+     * Never blocks the caller: [record] only enqueues, and one daemon thread
+     * does all the writing. A kill loses whatever was still queued, but nothing
+     * already written — the writer flushes every line.
+     */
+    private class FLine(val at: Long, val level: Char, val text: String, val track: String?)
+
+    private val fileQueue = LinkedBlockingQueue<FLine>()
+
+    @Volatile
+    private var sessionStarted = false
+
+    private lateinit var sessionDir: File
+
+    /**
+     * Starts the session file. Idempotent — call from `Application.onCreate`.
+     * Rotates: the previous run's file survives one restart as
+     * session-previous, so a Copy Log taken after the restart still reaches
+     * the session that actually broke.
+     */
+    fun startSession(context: Context) {
+        synchronized(lines) {
+            if (sessionStarted) return
+            sessionStarted = true
+        }
+        sessionDir = File(context.filesDir, "session-log").apply { mkdirs() }
+        File(sessionDir, PREVIOUS_NAME).delete()
+        File(sessionDir, CURRENT_NAME).takeIf { it.exists() }
+            ?.renameTo(File(sessionDir, PREVIOUS_NAME))
+        val current = File(sessionDir, CURRENT_NAME)
+        current.writeText(
+            "BitChord session — ${Date()} — ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE}) — " +
+                "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}\n",
+        )
+        thread(name = "bitchord-log", isDaemon = true) { writeLoop(current) }
+    }
+
+    private fun writeLoop(file: File) {
+        // Thread-confined: SimpleDateFormat is not safe to share, and CLOCK
+        // above already lives on whatever dispatcher reads the paste.
+        val clock = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+        var lastKey: String? = null
+        var repeats = 0
+        fun flushRepeat() {
+            if (repeats > 1) {
+                file.appendText("${clock.format(Date())} · ↳ above ×$repeats\n")
+            }
+            repeats = 0
+        }
+        try {
+            while (true) {
+                val line = fileQueue.take()
+                val key = "${line.level}|${line.text}|${line.track}"
+                if (key == lastKey) {
+                    repeats++
+                    continue
+                }
+                flushRepeat()
+                lastKey = key
+                repeats = 1
+                val tag = line.track?.let { " [about=$it]" }.orEmpty()
+                file.appendText("${clock.format(Date(line.at))} ${line.level} ${line.text}$tag\n")
+            }
+        } catch (_: InterruptedException) {
+            // Daemon thread; the process going away is the only shutdown.
+        }
+    }
+
+    /**
+     * The whole session as text: previous run first, then this one. No size
+     * cap by decision — a deduplicated session is hundreds of kilobytes, and
+     * the one line that matters is never the one a cap would keep.
+     */
+    suspend fun fullSession(): String = withContext(Dispatchers.IO) {
+        if (!sessionStarted) return@withContext "(session file logging never started)"
+        buildString {
+            val prev = File(sessionDir, PREVIOUS_NAME).takeIf { it.exists() }
+            val cur = File(sessionDir, CURRENT_NAME).takeIf { it.exists() }
+            if (prev != null) {
+                appendLine("===== previous session =====")
+                val text = prev.readText()
+                append(text)
+                if (!text.endsWith("\n")) appendLine()
+            }
+            if (cur != null) {
+                appendLine("===== current session =====")
+                append(cur.readText())
+            }
+        }
+    }
+
+    /**
+     * The full session as a file under cache/shared — the one folder the
+     * FileProvider hands out — ready to attach to a share intent.
+     */
+    suspend fun shareableSessionFile(context: Context): File = withContext(Dispatchers.IO) {
+        val shared = File(context.cacheDir, "shared").apply { mkdirs() }
+        val out = File(shared, "bitchord-session-log.txt")
+        out.writeText(fullSession())
+        out
     }
 
     // ── Reading ─────────────────────────────────────────────────────────────
@@ -201,8 +326,10 @@ object TrackLog {
         val since = held.filter { from == null || it.at >= from }
         val window = since.filter { it.track == null || it.track == song.videoId }
         header(song, stats, from, window.size, since.size - window.size) + "\n" +
-            window.joinToString("\n") { "${CLOCK.format(Date(it.at))} ${it.level} ${it.text}" } +
-            "\n"
+            window.joinToString("\n") { line ->
+                val times = if (line.repeats > 1) " (×${line.repeats})" else ""
+                "${CLOCK.format(Date(line.at))} ${line.level} ${line.text}$times"
+            } + "\n"
     }
 
     // ── The part that isn't the log ─────────────────────────────────────────
@@ -271,6 +398,10 @@ object TrackLog {
      * usually nothing.
      */
     private const val LEAD_IN_MS = 20_000L
+
+    private const val CURRENT_NAME = "session-current.txt"
+
+    private const val PREVIOUS_NAME = "session-previous.txt"
 
     /** Roughly the last few tracks' worth, and small enough to hold without thinking about it. */
     private const val MAX_HELD_CHARS = 512_000

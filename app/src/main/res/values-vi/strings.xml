@@ -293,6 +293,7 @@
     <string name="connect_account_first">Hãy kết nối tài khoản trước</string>
     <string name="connected_presence_off">Đã kết nối, tắt trạng thái</string>
     <string name="copy_log">Sao chép nhật ký</string>
+    <string name="log_share_failed">Không chia sẻ được nhật ký phiên</string>
     <string name="couldnt_find">Không thể tìm thấy %1$s</string>
     <string name="couldnt_open_link">Không thể mở liên kết đó</string>
     <string name="create_playlist">Tạo danh sách phát</string>
@@ -903,10 +904,6 @@
     <string name="translation_language_app_default">App language</string>
 
     <string name="translation_language_subtitle">Follows the app language</string>
-
-    <string name="jiosaavn_mismatch_warning">Có thể khớp nhầm phiên bản bài hát. Hãy tự chịu rủi ro khi bật.</string>
-    <string name="enable_jiosaavn">Bật JioSaavn?</string>
-    <string name="enable_anyway">Vẫn bật</string>
 
     <string name="search_languages">Search languages</string>
 

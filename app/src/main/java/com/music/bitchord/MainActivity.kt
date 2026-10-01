@@ -18,6 +18,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -3135,6 +3136,39 @@ private fun BitChordApp(
                                     ),
                                     Toast.LENGTH_SHORT,
                                 ).show()
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    // Long-press the same row: the whole session (this run plus
+                    // the previous one) as a file, for bugs that need a restart
+                    // to escape — the in-memory paste above dies with the
+                    // process, the session file does not.
+                    onCopyLogFull = if (fromPlayer) {
+                        {
+                            songActions = null
+                            scope.launch {
+                                try {
+                                    val file = TrackLog.shareableSessionFile(context)
+                                    val uri = FileProvider.getUriForFile(
+                                        context,
+                                        "${context.packageName}.fileprovider",
+                                        file,
+                                    )
+                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, song.title))
+                                } catch (_: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.log_share_failed),
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
                             }
                         }
                     } else {

@@ -5,6 +5,8 @@ import com.music.bitchord.R
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -152,6 +154,12 @@ fun SongActionsSheet(
      * except the player, where "this track" means something.
      */
     onCopyLog: (() -> Unit)? = null,
+    /**
+     * Long-press on the Copy Log row: shares the whole session (this run plus
+     * the previous one) as a file. Null everywhere except the player, like
+     * [onCopyLog] — a paste means nothing without a track behind it.
+     */
+    onCopyLogFull: (() -> Unit)? = null,
     /** Opens the timing control offered only by the main player's menu. */
     onLyricsOffset: (() -> Unit)? = null,
     /**
@@ -321,7 +329,13 @@ fun SongActionsSheet(
         // now rather than about the song as a thing in a library, and it is
         // the one row here nobody reaches for by accident.
         onCopyLog?.let {
-            ActionRow(Icons.Rounded.BugReport, stringResource(R.string.copy_log), accent = palette.accent, onClick = it)
+            ActionRow(
+                Icons.Rounded.BugReport,
+                stringResource(R.string.copy_log),
+                accent = palette.accent,
+                onClick = it,
+                onLongClick = onCopyLogFull,
+            )
         }
         Spacer(Modifier.height(24.dp))
     }
@@ -625,6 +639,7 @@ private fun sleepTimerCountdown(): String? {
  * artwork passes the artwork's accent instead, so the row belongs to the sheet
  * it is drawn on.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ActionRow(
     icon: ImageVector,
@@ -633,11 +648,18 @@ internal fun ActionRow(
     tint: Color? = null,
     accent: Color = MaterialTheme.colorScheme.primary,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                },
+            )
             .padding(horizontal = 22.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
