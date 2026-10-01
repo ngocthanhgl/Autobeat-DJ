@@ -647,8 +647,8 @@ internal fun ActionRow(
     value: String? = null,
     tint: Color? = null,
     accent: Color = MaterialTheme.colorScheme.primary,
-    onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
