@@ -113,6 +113,14 @@ fun glassIndicatorColor(): Color =
 fun Modifier.lightweightLiquidGlass(
     shape: CornerBasedShape,
     fallbackColor: Color,
+    /**
+     * Whether to draw the glass hairline edge.
+     *
+     * On for every floating surface; off for controls that already own an
+     * edge of their own — a Switch with transparent borders, where the
+     * hairline reads as a stray white ring around the track.
+     */
+    edge: Boolean = true,
 ): Modifier {
     val useGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
     val glassTint = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
@@ -137,7 +145,7 @@ fun Modifier.lightweightLiquidGlass(
                 Modifier
             },
         )
-        .border(GLASS_EDGE_WIDTH, GLASS_EDGE_COLOR, shape)
+        .then(if (edge) Modifier.border(GLASS_EDGE_WIDTH, GLASS_EDGE_COLOR, shape) else Modifier)
 }
 
 /**

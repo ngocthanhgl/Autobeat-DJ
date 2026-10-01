@@ -504,10 +504,7 @@ private fun artworkPageSurface(
  * It is the signed-in Google account's own photo ΓÇö the same one YouTube Music
  * shows there ΓÇö and tapping it opens Settings, where the account lives. Signed
  * out, or before the account menu has come back, it falls back to a person
- * glyph on a filled circle so the tap target never disappears.
- *
- * The hairline ring is what keeps a photo with light edges from dissolving into
- * the bar's glass; it is the same one thumbnails elsewhere carry.
+ * glyph on the same glass circle so the tap target never disappears.
  */
 @Composable
 fun TopBarAccountButton(
@@ -515,6 +512,7 @@ fun TopBarAccountButton(
     onClick: () -> Unit,
     onSwipeProfile: ((forward: Boolean) -> Boolean)? = null,
     modifier: Modifier = Modifier,
+    hazeState: HazeState? = null,
 ) {
     val translation = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -539,6 +537,12 @@ fun TopBarAccountButton(
                 )
             },
     ) {
+    // The photo sits on the exact same surface as the logo mark and the
+    // back button opposite it — one 44dp circle, one glass, one hairline —
+    // so the two ends of the bar read as a pair. The old thumbnail ring was
+    // a different width and colour with no glass behind it, which is the
+    // mismatch this replaces.
+    val avatarSurface = artworkPageSurface(shape = CircleShape, hazeState = hazeState)
         val photo = account?.thumbnailUrl
         if (photo != null) {
             AsyncImage(
@@ -547,22 +551,19 @@ fun TopBarAccountButton(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(AVATAR_SIZE)
-                    .clip(CircleShape)
-                    .thumbnailBorder(CircleShape),
+                    .then(avatarSurface),
             )
         } else {
             Box(
                 modifier = Modifier
                     .size(AVATAR_SIZE)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .thumbnailBorder(CircleShape),
+                    .then(avatarSurface),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Rounded.Person,
                     contentDescription = stringResource(R.string.switch_account),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(24.dp),
                 )
             }

@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.autobeat.data.settings.AppSettings
@@ -33,7 +34,7 @@ import dev.chrisbanes.haze.materials.HazeMaterials
  * the black edge this exists to avoid. The gradient is eased across the whole
  * height so it still arrives at nothing before the layer ends.
  */
-private val FADE_RUN = 96.dp
+internal val FADE_RUN = 96.dp
 
 /**
  * How much blur the fade reaches at its outer edge — short of all of it.
@@ -97,13 +98,22 @@ fun TopFadeBlur(
      * underneath would be painted over by the blurred content and do nothing.
      */
     scrimColor: Color,
+    /**
+     * How far the fade runs past the bar.
+     *
+     * The full run is for artwork-led pages, where the fade must die inside
+     * the picture. Pages with a search field sitting directly under the bar
+     * pass a short run: the full one lands on the field and the tab row and
+     * reads as a smear over them.
+     */
+    fadeRun: Dp = FADE_RUN,
 ) {
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     // The bar fills itself solid instead when blur is reduced, so this has
     // nothing left to do.
     if (reduceDynamicBlur) return
 
-    val height = topBarHeight() + FADE_RUN
+    val height = topBarHeight() + fadeRun
     Box(
         modifier = modifier
             .fillMaxWidth()

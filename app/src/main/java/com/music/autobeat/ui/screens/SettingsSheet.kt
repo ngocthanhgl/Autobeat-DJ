@@ -2059,6 +2059,9 @@ internal fun GlassSwitch(
             shape = RoundedCornerShape(percent = 50),
             fallbackColor = if (checked) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.surfaceVariant,
+            // No hairline: the Switch's own (transparent) borders are the
+            // edge here, and the glass one reads as a stray white ring.
+            edge = false,
         ),
         enabled = enabled,
         colors = SwitchDefaults.colors(
