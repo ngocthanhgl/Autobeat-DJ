@@ -1,142 +1,185 @@
 <div align="center">
 
-<br/>
-<br/>
+<br>
+<br>
 
-<img src="Logo.png" alt="BitChord app icon" width="200" />
+<img src="Logo.png" alt="BitChord DJ" width="180">
 
-# BitChord
+# BitChord DJ
 
-### Aesthetic YouTube Music Client
+### AI-powered DJ mixing for BitChord
 
-<br/>
+Analyze. Match. Mix.
 
-[![Latest release](https://img.shields.io/github/v/release/kushagrasinghx/BitChord?style=for-the-badge&labelColor=0d1117)](https://github.com/kushagrasinghx/BitChord/releases)
-[![License](https://img.shields.io/github/license/kushagrasinghx/BitChord?style=for-the-badge&labelColor=0d1117)](https://github.com/kushagrasinghx/BitChord/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/kushagrasinghx/BitChord/total?style=for-the-badge&labelColor=0d1117)](https://github.com/kushagrasinghx/BitChord/releases)
+<br>
 
-<br/>
+[**Download APK**](#download) · [**Features**](#features) · [**Performance**](#performance) · [**License**](#license)
 
-[**Download**](#download) · [**Features**](#features) · [**Contributing**](#contributing) · [**Support**](#support) · [**Disclaimer**](#disclaimer)
+<br>
+<br>
 
-<br/>
-
-<a href="https://trendshift.io/repositories/177639?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-177639" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/177639/daily?language=Kotlin" alt="kushagrasinghx%2FBitChord | Trendshift" width="250" height="55"/></a>
-<a href="https://trendshift.io/repositories/177639?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-177639" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/177639/weekly?language=Kotlin" alt="kushagrasinghx%2FBitChord | Trendshift" width="250" height="55"/></a>
+<img src="Banner.png" alt="BitChord DJ Banner" width="100%">
 
 </div>
+
+---
 
 > [!IMPORTANT]
-> BitChord is not affiliated with, endorsed by, or connected to YouTube or Google in any way. Use it at your own discretion.
+> **BitChord DJ is an independent project.** It is not affiliated with, endorsed by, or connected to YouTube or Google.
+
+# <a id="features"></a>Features
+
+BitChord DJ keeps the familiar BitChord experience while adding a completely new focus: **AI-powered DJ mixing**.
+
+Instead of simply playing the next song, BitChord DJ analyzes your music and makes mixing decisions based on the characteristics of each track.
+
+## Basic DJ Mode
+
+Basic DJ Mode analyzes the **current track and the upcoming track** to determine the most suitable mixing point and transition.
+
+Supported techniques include:
+
+- Backspin
+- Beat Loop
+- Dynamic EQ
+- Vocal Ducking
+- Echo In / Out
+- Beat Matching
+- Tempo Adjustment
+- And more
+
+The system combines these techniques to create transitions that adapt to the music instead of applying the same transition every time.
+
+---
+
+## Harmonic Short Queue
+
+**Harmonic Short** analyzes the next **20 tracks** in your queue and reorganizes them into a more mix-friendly sequence.
+
+The analysis considers:
+
+- **BPM** — tempo compatibility
+- **Key** — harmonic compatibility
+- **Track-to-track flow** — smoother transitions between songs
+
+Instead of simply following the original queue order, Harmonic Short attempts to build a sequence where each track works naturally with the next one.
+
+---
+
+# <a id="performance"></a>Performance
+
+One of the main goals of BitChord DJ is **fast AI analysis without keeping the device under heavy load for too long**.
+
+## Track Analysis
+
+| | Original BitChord | BitChord DJ |
+|---|---:|---:|
+| Track analysis | Up to ~1 minute | **~5–6 seconds** |
+| Primary focus | General playback | **DJ analysis** |
+| Analysis | — | **AI-powered** |
+
+> **~5–6 seconds on flagship hardware**
+
+Actual performance depends on the device, track length, audio format, and analysis workload.
+
+## Real-world Test
+
+Tested on:
+
+**Vivo X200 Pro**  
+MediaTek **Dimensity 9400**
+
+When **Harmonic Short** analyzes 20 tracks, the device gets warm during the intensive analysis phase and returns toward normal afterward.
+
+This behavior is intentional.
+
+> **Short, intensive workloads are preferred over keeping the device under sustained high load for a longer period.**
+
+The objective is simple: finish the analysis quickly, then get out of the heavy workload.
+
+---
+
+# Recommended Usage
+
+BitChord DJ works best with **offline music**.
+
+For the most consistent results, use tracks that are:
+
+- From the **same genre**
+- From **similar genres**
+- Similar in overall musical style
+
+The more consistent the music library, the more useful the BPM, Key, and musical analysis becomes for creating smooth transitions.
+
+---
+
+# Why BitChord DJ?
+
+BitChord DJ is built around a simple idea:
+
+> **Let the device do the analysis. You enjoy the mix.**
+
+It combines:
+
+| | |
+|---|---|
+| **Fast Analysis** | Analyze tracks in seconds |
+| **AI-Powered Decisions** | Choose compatible transition points |
+| **DJ Effects** | Backspin, loops, echoes, EQ, vocal ducking and more |
+| **Harmonic Queue** | Arrange 20 upcoming tracks for smoother mixing |
+| **Mobile-first Performance** | Complete intensive analysis quickly |
+
+---
+
+# <a id="download"></a>Download
+
+Get the latest signed APK from the:
+
+### [GitHub Releases](https://github.com/ngocthanhgl/BitChord-DJ/releases)
+
+> [!NOTE]
+> Sideloading requires enabling **"Install unknown apps"** for the application you use to install the APK.
+
+---
+
+# <a id="disclaimer"></a>Disclaimer & Legal Notice
+
+BitChord DJ is an independent, community-driven third-party audio player and DJ client.
+
+It is **not associated with Google LLC, YouTube Music, Deezer, Telegram, or their parent companies.**
+
+## No Media Hosting
+
+BitChord DJ does not host, upload, or store copyrighted music files. It operates as an interface for scanning local device storage or interacting with public, public-facing, or user-authenticated APIs.
+
+## Fair Use & API Usage
+
+This software is intended for personal research, educational, and fair-use purposes. Users are responsible for ensuring that their usage complies with applicable local copyright laws and the Terms of Service of any third-party services they access.
+
+## Third-party Services
+
+BitChord DJ does not guarantee permanent bypasses, modifications, or continued compatibility with commercial third-party platform conditions.
+
+## Copyleft
+
+BitChord DJ is free software licensed under the **GNU General Public License v3.0 (GPLv3)**.
+
+---
+
+# <a id="license"></a>License
+
+This project is licensed under the **GNU General Public License v3.0**.
+
+See [`LICENSE`](LICENSE) for the full license text.
 
 ---
 
 <div align="center">
 
-<img src="Banner.png" alt="BitChord banner" width="100%" />
+<br>
 
-<h1><a id="features"></a>Features</h1>
+### BitChord DJ
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
+**AI-powered mixing. Built for mobile.**
 
-#### Playback
-- **Search, browse and play** anything available on YouTube Music.
-- **Hi-Res lossless audio** — FLAC/ALAC from a configured module source, with YouTube Music as fallback.
-- **Gapless playback with true crossfade**, adjustable 0–12s.
-- **Automix [Beta]** — DJ-style transitions with beat-matching and tempo-stretching.
-- **Offline downloads** — save tracks with embedded metadata.
-- **Local music library** integration.
-- **Background playback** via a proper foreground media session.
-- **Apple-like lyrics animation** — credit to [binimum](https://github.com/binimum/am-lyrics).
-
-#### Experience
-- **Animated album canvas** — motion artwork on the now-playing screen.
-- **Word-synced lyrics** — word/syllable-level highlighting from multiple sources.
-- **Dynamic, artwork-driven theming** — Material palette extracted from album art.
-- **Frosted-glass UI** — Telegram-style translucent bars via Haze, Material 3 theming.
-
-    </td>
-    <td width="50%" valign="top">
-
-#### Connectivity & Accounts
-- **Sign in with your Google account** for personalized content.
-- **Discord Rich Presence** — in-app login, live track/artist/album and progress.
-- **Scrobbling** to Last.fm and ListenBrainz.
-- **Pluggable sources** — add, edit, test and health-check module sources.
-
-#### Controls & Tweaks
-- **Per-network audio quality** — separate quality ceilings for Wi-Fi and mobile data.
-- **Playback speed control** (0.5×–2.0×) and **skip silence**.
-- **Sleep timer** — fixed presets or "stop after this track".
-- **System equalizer** integration.
-- **Stats for nerds** — codec, bit depth, sample rate, and more on the now-playing screen.
-
-    </td>
-  </tr>
-</table>
-
-</div>
-
----
-
-<div align="center">
-
-<h1><a id="download"></a>Download</h1>
-
-Grab the latest signed APK from the [Releases](https://github.com/kushagrasinghx/BitChord/releases) page. Sideloading requires enabling "Install unknown apps" for whichever app you download it with.
-
-</div>
-
----
-
-<div align="center">
-
-<h1><a id="contributing"></a>Contributing</h1>
-
-We welcome contributions to BitChord! When submitting a Pull Request, please ensure you make your PR against the **`latest`** branch, not the `main` branch.
-
-</div>
-
----
-
-<div align="center">
-
-<h1><a id="support"></a>Support</h1>
-
-BitChord is free and always will be — if it's earned a spot in your rotation, you can chip in here:
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kushagrasinghx)
-[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/kuxhagrasingh)
-
-<br/>
-<br/>
-<img src="upi_support.jpg" alt="UPI Support" width="250" />
-
-</div>
-
----
-
-<div align="center">
-
-<h1><a id="disclaimer"></a>Disclaimer & Legal Notice</h1>
-
-BitChord is an independent, community-driven third-party audio player and client. It is **not** associated with Google LLC, YouTube Music, Deezer, Telegram, or any of their parent companies.
-
-* **No Media Hosting:** BitChord does not host, upload, or store copyrighted music files. It operates strictly as an interface to scan local device storage or stream media directly from public, public-facing, or user-authenticated APIs.
-* **Fair Use & API Usage:** This software is created solely for personal research, educational, and fair-use purposes. The user is entirely responsible for ensuring their usage aligns with their local copyright laws and YouTube Terms of Service.
-* **No Ad-Blocking Guarantee:** While BitChord focuses on providing a clean listening environment, it does not guarantee permanent bypasses or modifications to commercial third-party platform conditions.
-* **Copyleft:** BitChord is free software under the GPLv3. The license does not let anyone forbid others from selling or redistributing copies, but any distribution must come with the Corresponding Source under the same license.
-
-</div>
-
----
-
-<div align="center">
-
-<h1><a id="license"></a>License</h1>
-
-This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. See the [LICENSE](LICENSE) file for details.
-
-</div>
+<br
