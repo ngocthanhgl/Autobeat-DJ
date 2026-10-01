@@ -3,7 +3,7 @@
 <br>
 <br>
 
-<img src="autobeat-logo.svg" alt="Autobeat" width="360">
+<img src="autobeat-logo.svg" alt="Autobeat" width="180">
 
 # Autobeat
 
