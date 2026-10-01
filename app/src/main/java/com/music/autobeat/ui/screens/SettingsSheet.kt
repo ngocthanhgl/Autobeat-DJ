@@ -2039,8 +2039,11 @@ internal fun SettingsRow(
 /**
  * Every on/off toggle on this page through one door: a Material3 Switch with
  * transparent tracks over a liquid-glass pill, so the glass carries the
- * control instead of a flat fill. Off glass falls back to the theme's surface
- * variant, on glass to the primary.
+ * control instead of a flat fill. The pill is dyed by the state —
+ * primary-tinted when on, neutral when off — because a state-blind tint over
+ * a transparent track left on and off differing only by thumb position.
+ * Off glass falls back to the theme's surface variant, on glass to the
+ * primary, so with glass disabled this is pixel-for-pixel the stock Switch.
  */
 @Composable
 internal fun GlassSwitch(
@@ -2050,11 +2053,17 @@ internal fun GlassSwitch(
     enabled: Boolean = true,
 ) {
     Box(
-        modifier = modifier.lightweightLiquidGlass(
-            shape = CircleShape,
-            fallbackColor = if (checked) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.surfaceVariant,
-        ),
+        modifier = modifier
+            .lightweightLiquidGlass(
+                shape = CircleShape,
+                fallbackColor = if (checked) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+            )
+            .background(
+                color = if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                else Color.Transparent,
+                shape = CircleShape,
+            ),
     ) {
         Switch(
             checked = checked,
@@ -2065,6 +2074,7 @@ internal fun GlassSwitch(
                 uncheckedTrackColor = Color.Transparent,
                 checkedBorderColor = Color.Transparent,
                 uncheckedBorderColor = Color.Transparent,
+                checkedThumbColor = Color.White,
             ),
         )
     }

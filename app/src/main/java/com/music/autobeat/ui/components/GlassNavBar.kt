@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Pause
@@ -61,6 +62,38 @@ import com.music.autobeat.ui.components.floatingtabbar.FloatingTabBarDefaults
 import com.music.autobeat.ui.components.floatingtabbar.FloatingTabBarScrollConnection
 import com.music.autobeat.ui.haptics.Haptic
 import com.music.autobeat.ui.haptics.rememberHaptics
+
+/**
+ * Every tab glyph sits on its own glass tile, so an unselected tab still
+ * reads as glass rather than as a flat glyph waiting for the pill. The
+ * selected tab keeps the full sliding indicator behind it; the tile is the
+ * quieter constant layer.
+ */
+@Composable
+private fun GlassTabTile(
+    selected: Boolean,
+    content: @Composable () -> Unit,
+) {
+    val useGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .then(
+                if (selected && useGlass) {
+                    Modifier.liquidGlass(CircleShape)
+                } else {
+                    Modifier.lightweightLiquidGlass(
+                        shape = CircleShape,
+                        fallbackColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                        else Color.Transparent,
+                    )
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
 
 /**
  * The liquid glass navigation bar: the iOS 26 shape where the now playing
@@ -206,12 +239,14 @@ fun GlassNavBar(
                 standaloneTab(
                     key = index,
                     icon = {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = tint,
-                            modifier = Modifier.size(25.dp),
-                        )
+                        GlassTabTile(selected = isSelected) {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                tint = tint,
+                                modifier = Modifier.size(25.dp),
+                            )
+                        }
                     },
                     onClick = onClick,
                 )
@@ -219,12 +254,14 @@ fun GlassNavBar(
                 tab(
                     key = index,
                     icon = {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = tint,
-                            modifier = Modifier.size(25.dp),
-                        )
+                        GlassTabTile(selected = isSelected) {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                tint = tint,
+                                modifier = Modifier.size(25.dp),
+                            )
+                        }
                     },
                     title = {
                         Text(

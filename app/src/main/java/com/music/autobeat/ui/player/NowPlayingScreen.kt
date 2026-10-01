@@ -2490,10 +2490,16 @@ fun NowPlayingScreen(
             // border" under the status bar) and banded on OLED. TopFadeBlur
             // ramps actual blur to nothing with an eased 12-stop scrim, so
             // there is no edge left to find.
+            //
+            // Opaque wash, never transparent: the material shows its flat base
+            // colour where the blur has nothing to sample past the top edge,
+            // and transparent meant that flat showed black into the artwork.
             if (heroVisible > 0.01f) {
+                val wash = rememberArtworkColors(song.thumbnailUrl, canvasFrame)
+                    .colors.firstOrNull() ?: MaterialTheme.colorScheme.surface
                 TopFadeBlur(
                     hazeState = playerHaze,
-                    pageColor = Color.Transparent,
+                    pageColor = wash,
                     scrimColor = Color.Black,
                     modifier = Modifier.align(Alignment.TopStart),
                 )

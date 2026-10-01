@@ -389,7 +389,7 @@ private fun FloatingAppMark(
                 painter = painterResource(R.drawable.ic_logo),
                 contentDescription = null,
                 colorFilter = ColorFilter.tint(contentColor),
-                modifier = Modifier.size(width = 24.dp, height = 16.dp),
+                modifier = Modifier.size(width = 36.dp, height = 24.dp),
             )
         }
         if (BuildConfig.FLAVOR == "dev") {
