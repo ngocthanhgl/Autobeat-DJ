@@ -42,6 +42,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -111,6 +113,16 @@ private val ActionsInset = 56.dp
 
 /** What the leading end of the bar needs: a back button, or the wordmark. */
 private fun leadingInset(hasBack: Boolean): Dp = if (hasBack) BackInset else WordmarkInset
+
+/**
+ * Whether the account button is being drawn inside the floating actions pill.
+ *
+ * The pill is already a glass circle of its own, so the button sitting in it
+ * must not draw a second one around itself — that second ring is the double
+ * edge the bar's two ends are matched to avoid. Outside the pill (the plain
+ * row on non-floating chrome) the button keeps its own circle.
+ */
+private val LocalTopBarInPill = compositionLocalOf { false }
 
 /**
  * How far down the window the bar actually ends: the status bar inset it is
@@ -444,7 +456,11 @@ private fun ArtworkPageActions(
             .artworkActionEdgePadding(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        content()
+        // The pill is the circle here: anything inside it draws bare so the
+        // account end keeps the single ring the logo and back ends have.
+        CompositionLocalProvider(LocalTopBarInPill provides true) {
+            content()
+        }
     }
 }
 
@@ -541,8 +557,15 @@ fun TopBarAccountButton(
     // back button opposite it — one 44dp circle, one glass, one hairline —
     // so the two ends of the bar read as a pair. The old thumbnail ring was
     // a different width and colour with no glass behind it, which is the
-    // mismatch this replaces.
-    val avatarSurface = artworkPageSurface(shape = CircleShape, hazeState = hazeState)
+    // mismatch this replaces. Inside the floating actions pill there is no
+    // surface of its own at all: the pill is the circle, and a second one
+    // around the photo would be the double ring.
+    val inPill = LocalTopBarInPill.current
+    val avatarSurface = if (inPill) {
+        Modifier.clip(CircleShape)
+    } else {
+        artworkPageSurface(shape = CircleShape, hazeState = hazeState)
+    }
         val photo = account?.thumbnailUrl
         if (photo != null) {
             AsyncImage(

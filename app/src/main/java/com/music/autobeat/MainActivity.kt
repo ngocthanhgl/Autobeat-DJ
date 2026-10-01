@@ -2609,8 +2609,10 @@ private fun AutobeatApp(
                     // Device-folder pages lead with their own search field
                     // directly under the bar: the full run lands on the field
                     // and the tab row and reads as a smear over them, so the
-                    // fade ends inside the content gap instead.
-                    fadeRun = if (isLocalDetail) 8.dp else FADE_RUN,
+                    // fade ends just past the content gap instead — long
+                    // enough that scrolled rows blur out before reaching the
+                    // bar's glyphs, short enough to leave the field clean.
+                    fadeRun = if (isLocalDetail) 20.dp else FADE_RUN,
                     // Replay paints its own full-bleed black backdrop up under the
                     // status bar, exactly as a release page's artwork does.
                     pageColor = when {

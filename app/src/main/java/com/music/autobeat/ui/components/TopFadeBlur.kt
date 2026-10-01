@@ -28,13 +28,12 @@ import dev.chrisbanes.haze.materials.HazeMaterials
  * The run the fade needs below the bar to get from full blur to none without
  * the eye finding where it got there.
  *
- * Deliberately tall: the fade is one uniform treatment from the status bar
- * down into the artwork, not a short strip that ends mid-picture. A short
- * strip ends where the eye is already looking and its end reads as a line —
- * the black edge this exists to avoid. The gradient is eased across the whole
- * height so it still arrives at nothing before the layer ends.
+ * Long enough to die inside the artwork on detail pages rather than ending
+ * mid-picture as a visible line, short enough to stay clear of the controls
+ * sitting under the bar on feed pages. The gradient is eased across the
+ * whole height so it still arrives at nothing before the layer ends.
  */
-internal val FADE_RUN = 96.dp
+internal val FADE_RUN = 48.dp
 
 /**
  * How much blur the fade reaches at its outer edge — short of all of it.

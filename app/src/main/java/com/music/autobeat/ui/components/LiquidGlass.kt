@@ -121,6 +121,14 @@ fun Modifier.lightweightLiquidGlass(
      * hairline reads as a stray white ring around the track.
      */
     edge: Boolean = true,
+    /**
+     * Whether to draw the refractive top highlight.
+     *
+     * On for every floating surface; off for small controls like a Switch
+     * track, where the shape-following bright edge reads as a stadium ring
+     * around the control.
+     */
+    highlight: Boolean = true,
 ): Modifier {
     val useGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
     val glassTint = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
@@ -136,7 +144,7 @@ fun Modifier.lightweightLiquidGlass(
             shape = shape,
         )
         .then(
-            if (useGlass) {
+            if (useGlass && highlight) {
                 HighlightElement(
                     shapeProvider = shapeProvider,
                     highlight = { Highlight.Default },
