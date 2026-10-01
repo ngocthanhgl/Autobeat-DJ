@@ -1,5 +1,10 @@
 package com.music.bitchord.ui.player
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -8,11 +13,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -35,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.R
 import com.music.bitchord.data.lyrics.LyricsSource
@@ -47,11 +61,13 @@ import dev.chrisbanes.haze.HazeState
 /**
  * Manual provider chooser for the lyrics half-player.
  *
- * It deliberately uses [PlayerDrawer], [ROW_SHAPE], and the same row geometry
- * as [AudioOutputSheet], so it behaves like another player destination rather
+ * It deliberately uses the same drawer shell and row geometry as
+ * [AudioOutputSheet], so it behaves like another player destination rather
  * than a settings dialog. A row that the automatic lookup already completed is
  * entirely local: hits switch immediately and misses cannot be requested twice.
  */
+private val PROVIDER_DRAWER_SHAPE = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
+private val PROVIDER_ROW_SHAPE = RoundedCornerShape(16.dp)
 @Composable
 internal fun LyricsProviderSheet(
     hazeState: HazeState,
@@ -70,12 +86,65 @@ internal fun LyricsProviderSheet(
         if (requestedSource != null && currentSource == requestedSource) onDismiss()
     }
 
-    PlayerDrawer(
-        hazeState = hazeState,
-        title = stringResource(R.string.choose_lyrics_provider),
-        onDismiss = onDismiss,
-        modifier = modifier,
+    // Flipped on the first composition so the drawer travels up from the edge
+    // instead of appearing over the player fully formed.
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = onDismiss,
+            ),
+        contentAlignment = Alignment.BottomCenter,
     ) {
+        AnimatedVisibility(
+            visible = shown,
+            enter = slideInVertically(tween(260, easing = FastOutSlowInEasing)) { it },
+            exit = slideOutVertically(tween(180)) { it },
+        ) {
+        Column(
+            modifier = Modifier
+                .heightIn(max = 560.dp)
+                .widthIn(max = 640.dp)
+                .fillMaxWidth()
+                .clip(PROVIDER_DRAWER_SHAPE)
+                .background(Color(0xFF121212))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                    onClick = {},
+                )
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp)
+                .padding(top = 10.dp, bottom = 20.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // The grab handle every sheet here has, and the thing that says the
+            // drawer can be pulled away before anybody tries it.
+            Box(
+                Modifier
+                    .padding(bottom = 12.dp)
+                    .size(width = 36.dp, height = 4.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.25f)),
+            )
+            Text(
+                text = stringResource(R.string.choose_lyrics_provider),
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                color = Color.White,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp, bottom = 14.dp),
+            )
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -93,6 +162,8 @@ internal fun LyricsProviderSheet(
                     },
                 )
             }
+        }
+        }
         }
     }
 }
@@ -119,7 +190,7 @@ private fun LyricsProviderRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(ROW_SHAPE)
+            .clip(PROVIDER_ROW_SHAPE)
             .background(Color.White.copy(alpha = if (current) 0.10f else 0.05f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },

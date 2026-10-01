@@ -1391,7 +1391,7 @@ fun NowPlayingScreen(
                     ) {
                         is LyricsTranslation.Result.Translated -> {
                             translationState = LyricsTranslationUiState.Ready(result.lines)
-                            showingTranslation = true
+                            lyricsDisplayMode = LyricsDisplayMode.Translated
                             translationTransition++
                             haptics.play(Haptic.ToggleOn)
                         }
@@ -2451,9 +2451,6 @@ fun NowPlayingScreen(
                 )
             }
 
-            }
-        }
-
         // Mount once, behind the controls. A known portrait aspect changes the
         // invisible view to full-player bounds before its first frame is shown.
         if (heroMode && heroHeight > 0.dp) {
@@ -2484,7 +2481,6 @@ fun NowPlayingScreen(
                 )
             }
         }
-            }
 
             // The clock, the signal bars and the drag handle are all white, and
             // the banner puts whatever the artwork happens to have up there

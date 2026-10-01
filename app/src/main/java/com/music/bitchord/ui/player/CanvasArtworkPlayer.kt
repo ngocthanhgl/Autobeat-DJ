@@ -57,6 +57,8 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 import java.util.Locale
 
+private const val TAG = "CanvasArt"
+
 /**
  * How long a clip gets to paint itself onto a surface it was just handed back
  * before the still art is brought in behind it instead. Long enough to cover a
@@ -296,7 +298,7 @@ fun CanvasArtworkPlayer(
         // can still catch the previous, empty buffer.
         withFrameMillis { }
         val view = textureView ?: return@LaunchedEffect
-        view.captureAt(frameCapturePx, clipAspect, contentMode)?.let(onFrameCaptured)
+        view.captureAt(frameCapturePx, clipAspect, contentMode, alignPortraitTop)?.let(onFrameCaptured)
     }
 
     // The opt-in follow-up to the capture above, for a caller that asked for
