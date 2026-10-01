@@ -1,0 +1,23 @@
+<!--
+  Autobeat launcher monochrome: the same mark in solid white for themed icons.
+  Android tints this itself, so no colour of ours survives here by design.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+  <path
+      android:fillColor="#00000000"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="16"
+      android:pathData="M124,256 A84,84 0 1 0 292,256 A84,84 0 1 0 124,256 Z" />
+  <path
+      android:fillColor="#00000000"
+      android:strokeColor="#FFFFFFFF"
+      android:strokeWidth="16"
+      android:pathData="M220,256 A84,84 0 1 0 388,256 A84,84 0 1 0 220,256 Z" />
+  <path
+      android:fillColor="#FFFFFFFF"
+      android:pathData="M256,187.06 A84,84 0 0 1 256,324.94 A84,84 0 0 0 256,187.06 Z" />
+</vector>

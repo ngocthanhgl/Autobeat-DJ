@@ -2,11 +2,11 @@
  * Ported from Orchard (https://github.com/SFG5453/Orchard).
  *
  * Copyright (C) 2026 SFG545 (original Orchard implementation)
- * Copyright (C) 2026 Kushagra Singh (BitChord adaptation)
+ * Copyright (C) 2026 Kushagra Singh (AUTOBEAT adaptation)
  *
  * Orchard's original source is licensed under the GNU Affero General Public
  * License, version 3 or later. Per AGPLv3 section 13, this file is combined
- * here into BitChord -- a work licensed under the GNU General Public
+ * here into AUTOBEAT -- a work licensed under the GNU General Public
  * License, version 3 or later -- and remains itself governed by the AGPLv3
  * as part of that combination.
  *
@@ -79,7 +79,7 @@ void AppendDoubles(std::string& out, const std::vector<double>& values) {
   out += ']';
 }
 
-void AppendEnergyCurve(std::string& out, const std::vector<bitchord::smart::EnergyPoint>& points) {
+void AppendEnergyCurve(std::string& out, const std::vector<AUTOBEAT::smart::EnergyPoint>& points) {
   out += '[';
   for (size_t index = 0; index < points.size(); ++index) {
     if (index > 0) out += ',';
@@ -92,7 +92,7 @@ void AppendEnergyCurve(std::string& out, const std::vector<bitchord::smart::Ener
   out += ']';
 }
 
-void AppendCuePoints(std::string& out, const std::vector<bitchord::smart::MixCuePoint>& points) {
+void AppendCuePoints(std::string& out, const std::vector<AUTOBEAT::smart::MixCuePoint>& points) {
   out += '[';
   for (size_t index = 0; index < points.size(); ++index) {
     if (index > 0) out += ',';
@@ -120,7 +120,7 @@ void AppendField(std::string& out, const char* name, double value, bool first = 
 extern "C" {
 
 JNIEXPORT jstring JNICALL
-Java_com_music_bitchord_playback_smart_TrackFeatures_nativeAnalyze(
+Java_com_music_autobeat_playback_smart_TrackFeatures_nativeAnalyze(
     JNIEnv* env,
     jclass /* clazz */,
     jfloatArray samples,
@@ -132,8 +132,8 @@ Java_com_music_bitchord_playback_smart_TrackFeatures_nativeAnalyze(
     env->GetFloatArrayRegion(samples, 0, count, input.data());
   }
 
-  const bitchord::smart::AnalysisResult result =
-      bitchord::smart::AnalyzeAudio(input, sample_rate, duration);
+  const AUTOBEAT::smart::AnalysisResult result =
+      AUTOBEAT::smart::AnalyzeAudio(input, sample_rate, duration);
 
   std::string json;
   // A whole-track energy curve dominates the output; reserving up front keeps
@@ -191,7 +191,7 @@ Java_com_music_bitchord_playback_smart_TrackFeatures_nativeAnalyze(
 }
 
 JNIEXPORT jdouble JNICALL
-Java_com_music_bitchord_playback_smart_TrackFeatures_nativeSampleRate(
+Java_com_music_autobeat_playback_smart_TrackFeatures_nativeSampleRate(
     JNIEnv* /* env */,
     jclass /* clazz */) {
   // The rate the analyzer's window and hop constants assume.
@@ -202,7 +202,7 @@ Java_com_music_bitchord_playback_smart_TrackFeatures_nativeSampleRate(
 // because the caller decodes at whatever rate the container carries and only
 // then knows what conversion is needed.
 JNIEXPORT jfloatArray JNICALL
-Java_com_music_bitchord_playback_smart_TrackFeatures_nativeResample(
+Java_com_music_autobeat_playback_smart_TrackFeatures_nativeResample(
     JNIEnv* env,
     jclass /* clazz */,
     jfloatArray samples,
@@ -215,7 +215,7 @@ Java_com_music_bitchord_playback_smart_TrackFeatures_nativeResample(
   }
 
   const std::vector<float> resampled =
-      bitchord::smart::Resample(input, input_rate, output_rate);
+      AUTOBEAT::smart::Resample(input, input_rate, output_rate);
 
   const jsize produced = static_cast<jsize>(resampled.size());
   jfloatArray result = env->NewFloatArray(produced);

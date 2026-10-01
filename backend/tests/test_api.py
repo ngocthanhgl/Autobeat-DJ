@@ -53,7 +53,7 @@ def test_an_avatar_has_to_be_an_http_url(client):
     body = create(client)
     response = client.post(
         f"/api/parties/{body['code']}/join",
-        json={**GUEST, "avatarUrl": "file:///data/data/com.music.bitchord/avatar.png"},
+        json={**GUEST, "avatarUrl": "file:///data/data/com.music.autobeat/avatar.png"},
     )
     assert response.status_code == 422
 

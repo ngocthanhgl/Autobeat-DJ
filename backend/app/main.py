@@ -1,4 +1,4 @@
-"""BitChord Listen Together — the party server.
+"""Autobeat Listen Together — the party server.
 
 The whole service in one sentence: a party is a six-character code, up to five
 signed-in devices, and one playback state that any of them may change and all of
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="BitChord Listen Together",
+    title="Autobeat Listen Together",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -77,7 +77,7 @@ async def _party_error(_: Request, exc: PartyError) -> JSONResponse:
 @app.get("/")
 async def root() -> dict[str, Any]:
     return {
-        "service": "bitchord-listen-together",
+        "service": "Autobeat-listen-together",
         "maxMembers": config.MAX_MEMBERS,
         "parties": len(store),
         "serverMs": now_ms(),

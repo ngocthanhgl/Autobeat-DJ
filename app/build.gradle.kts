@@ -53,11 +53,11 @@ val listenTogetherServer: String = (
     ).trim().trimEnd('/')
 
 android {
-    namespace = "com.music.bitchord"
+    namespace = "com.music.autobeat"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.music.bitchord"
+        applicationId = "com.music.autobeat"
         // 26 keeps reach wide; real-time blur (RenderEffect) kicks in on API 31+,
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
@@ -100,12 +100,12 @@ android {
     productFlavors {
         create("dev") {
             dimension = "env"
-            applicationId = "com.dev.bitchord"
-            resValue("string", "app_name", "Bitchord DJ Dev")
+            applicationId = "com.dev.autobeat"
+            resValue("string", "app_name", "Autobeat Dev")
         }
         create("prod") {
             dimension = "env"
-            // Matches defaultConfig — this is the package already shipped/installed.
+            // Matches defaultConfig's applicationId.
         }
     }
 

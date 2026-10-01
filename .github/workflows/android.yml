@@ -38,7 +38,7 @@ jobs:
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bitchord-dev-debug
+        name: autobeat-dev-debug
         path: app/build/outputs/apk/dev/debug/*.apk
         retention-days: 3
 
@@ -67,8 +67,8 @@ jobs:
         echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
         echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
         if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
-          echo "storeFile=bitchord-release.jks" > keystore.properties
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > autobeat-release.jks
+          echo "storeFile=autobeat-release.jks" > keystore.properties
           echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> keystore.properties
           echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> keystore.properties
           echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> keystore.properties
@@ -93,7 +93,7 @@ jobs:
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bitchord-prod-release-signed
+        name: autobeat-prod-release-signed
         path: app/build/outputs/apk/prod/release/*.apk
         retention-days: 3
 
@@ -110,7 +110,7 @@ jobs:
     - name: Download APK Artifact
       uses: actions/download-artifact@v4
       with:
-        name: bitchord-prod-release-signed
+        name: autobeat-prod-release-signed
         path: dist
 
     - name: Create public release with APK
@@ -120,7 +120,7 @@ jobs:
         VERSION=$(grep -o 'versionName = "[^"]*"' app/build.gradle.kts | head -1 | cut -d'"' -f2)
         if [ -z "$VERSION" ]; then echo "versionName not found in app/build.gradle.kts"; exit 1; fi
         TAG="v$VERSION"
-        if [ "${{ github.repository }}" != "ngocthanhgl/BitChord-DJ" ]; then REPO="ngocthanhgl/BitChord-DJ"; else REPO="${{ github.repository }}"; fi
+        if [ "${{ github.repository }}" != "ngocthanhgl/Autobeat-DJ" ]; then REPO="ngocthanhgl/Autobeat-DJ"; else REPO="${{ github.repository }}"; fi
         if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
           gh release delete "$TAG" --repo "$REPO" --cleanup-tag --yes
         fi
@@ -134,13 +134,13 @@ jobs:
         fi
         for f in dist/*.apk; do
           case "$(basename "$f")" in
-            *arm64-v8a*)   mv "$f" "dist/Bitchord-DJ-arm64-v8a-release.apk" ;;
-            *armeabi-v7a*) mv "$f" "dist/Bitchord-DJ-armeabi-v7a-release.apk" ;;
+            *arm64-v8a*)   mv "$f" "dist/Autobeat-DJ-arm64-v8a-release.apk" ;;
+            *armeabi-v7a*) mv "$f" "dist/Autobeat-DJ-armeabi-v7a-release.apk" ;;
             *) echo "unexpected APK: $f"; exit 1 ;;
           esac
         done
         ls -l dist/
         gh release create "$TAG" dist/*.apk \
           --repo "$REPO" \
-          --title "BitChord DJ Mix $TAG" \
+          --title "Autobeat Mix $TAG" \
           --notes "$NOTES"

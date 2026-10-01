@@ -15,6 +15,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Bitchord DJ"
+rootProject.name = "Autobeat"
 include(":app")
  

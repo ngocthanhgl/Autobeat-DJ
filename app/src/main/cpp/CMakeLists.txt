@@ -11,34 +11,34 @@
 # to that same tree without duplicating this module.
 
 cmake_minimum_required(VERSION 3.22.1)
-project(bitchord_analysis LANGUAGES CXX)
+project(autobeat_analysis LANGUAGES CXX)
 
-get_filename_component(BITCHORD_NATIVE_DIR
+get_filename_component(AUTOBEAT_NATIVE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../native"
     ABSOLUTE)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_library(bitchord_analysis SHARED
-    ${BITCHORD_NATIVE_DIR}/analyzer/audio_analysis.cpp
-    ${BITCHORD_NATIVE_DIR}/analyzer/tempo_analysis.cpp
-    ${BITCHORD_NATIVE_DIR}/analyzer/resampler.cpp
-    ${BITCHORD_NATIVE_DIR}/analyzer/mel_spectrogram.cpp
-    ${BITCHORD_NATIVE_DIR}/analyzer/vocal_spectrogram.cpp
+add_library(autobeat_analysis SHARED
+    ${AUTOBEAT_NATIVE_DIR}/analyzer/audio_analysis.cpp
+    ${AUTOBEAT_NATIVE_DIR}/analyzer/tempo_analysis.cpp
+    ${AUTOBEAT_NATIVE_DIR}/analyzer/resampler.cpp
+    ${AUTOBEAT_NATIVE_DIR}/analyzer/mel_spectrogram.cpp
+    ${AUTOBEAT_NATIVE_DIR}/analyzer/vocal_spectrogram.cpp
     jni/analysis_jni.cpp
     jni/mel_jni.cpp
     jni/vocal_jni.cpp
 )
 
-target_include_directories(bitchord_analysis PRIVATE
+target_include_directories(autobeat_analysis PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${BITCHORD_NATIVE_DIR}
+    ${AUTOBEAT_NATIVE_DIR}
 )
 
 # -ffast-math is deliberately NOT enabled: the analyzer's log/mel-adjacent
 # arithmetic (see audio_analysis.cpp) is tuned against exact IEEE behaviour.
-target_compile_options(bitchord_analysis PRIVATE -O3 -fvisibility=hidden)
+target_compile_options(autobeat_analysis PRIVATE -O3 -fvisibility=hidden)
 
 find_library(log-lib log)
-target_link_libraries(bitchord_analysis ${log-lib})
+target_link_libraries(autobeat_analysis ${log-lib})
