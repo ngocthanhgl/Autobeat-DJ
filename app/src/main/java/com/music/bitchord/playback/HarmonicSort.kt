@@ -8,6 +8,8 @@ import com.music.bitchord.data.TrackLog
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.playback.smart.TrackAnalysis
 import com.music.bitchord.playback.smart.TrackAnalyzer
+import com.music.bitchord.playback.smart.camelotLabel
+import com.music.bitchord.playback.smart.camelotOf
 import com.music.bitchord.playback.smart.findBestCandidate
 import com.music.bitchord.playback.smart.meanEnergy
 import kotlinx.coroutines.CancellationException
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
+import kotlin.math.log2
 
 /**
  * Harmonic Sort as an edit to the queue, not a playback mode — the same shape
@@ -37,9 +40,11 @@ import kotlin.math.abs
  * that is playing. Turning it off puts the queue back the way it was found.
  *
  * Since the vibe picker, the greedy is steered by a set arc as well as the
- * handover: each slot maximizes `pairScore − λ·|energy − target|`, where the
+ * handover: each slot maximizes
+ * `pair + route − tempoDrift + vocal − λ·|dropEnergy − target|`, where the
  * target comes from the selected [Vibe]. Same scorer, same real-time jumps —
- * but the chain now climbs, peaks, or cools down on purpose.
+ * but the chain now walks the wheel, climbs toward its own median tempo,
+ * peaks on the drop instead of the outro, and breathes between vocals.
  *
  * The measuring is the hard part, and it is deliberately sequential. The
  * analyzer drains through one or two single-threaded FIFO lanes, each decode
@@ -113,6 +118,49 @@ object HarmonicSort {
      * but not ignore it.
      */
     const val VIBE_LAMBDA = 0.6
+
+    /**
+     * Key-route memory: a greedy that only sees the last handover wanders the
+     * wheel — up a fifth, down a fifth, mode-flapping back and forth. Real sets
+     * walk: keep climbing while climbing, resolve while resolving. The terms
+     * are small on purpose; route steers between near-equal handovers, it
+     * never overrules a genuinely better blend.
+     */
+    private const val ROUTE_CONTINUE_BONUS = 0.08
+    private const val ROUTE_REVERSAL_PENALTY = 0.10
+    private const val ROUTE_FLAP_PENALTY = 0.06
+
+    /**
+     * Energy-boost: a deliberate +2 wheel jump on the same ring (8A -> 10A)
+     * reads as a lift, not a clash — but only timed at the peak and only when
+     * the tempo already locks. Anywhere else, or with a loose tempo fit, the
+     * far key keeps its 0.0 and the sort walks past it.
+     */
+    private const val BOOST_KEY_SCORE = 0.55
+    private const val BOOST_MIN_BPM_FIT = 0.7
+    private const val BOOST_KEY_WEIGHT = 0.30
+
+    /**
+     * Tempo trajectory: the set should drift toward its own median, not
+     * sawtooth 128 -> 100 -> 128 through ratio rescues. Penalty is in octaves
+     * so a 3 BPM nudge costs ~0.01 and a fifth-jump costs ~0.15.
+     */
+    private const val TEMPO_TRAJECTORY_WEIGHT = 0.25
+
+    /**
+     * Palate cleanser: two vocal choruses back to back tire the ear faster
+     * than any key clash. Punish stacking, reward an instrumental breather —
+     * gently, as a nudge between near-equal handovers.
+     */
+    private const val VOCAL_STACK_PENALTY = 0.12
+    private const val VOCAL_CLEAN_BONUS = 0.06
+    private const val VOCAL_HEAVY = 0.5
+    private const val VOCAL_SPARSE = 0.2
+
+    /** 30-second sliding window for the drop-energy read. */
+    private const val DROP_WINDOW_SECONDS = 30.0
+    /** Ignored head/tail share of the curve: intro fades and outro tails lie. */
+    private const val DROP_EDGE_TRIM = 0.10
 
     private val _active = MutableStateFlow(false)
 
@@ -344,6 +392,96 @@ object HarmonicSort {
     }
 
     /**
+     * What the crowd actually hears: the loudest 30-second window, not the
+     * whole-track mean. A nuclear drop with a long ambient outro used to read
+     * as "low energy" because the tail diluted the mean; the window hears the
+     * drop. Trims the outer 10% so intro fades and end tails cannot win.
+     * Falls back to the mean on short or degenerate curves.
+     */
+    private fun dropEnergy(analysis: TrackAnalysis): Double? {
+        val pts = analysis.energyCurve.filter {
+            it.time.isFinite() && it.energy.isFinite() && it.energy >= 0
+        }
+        if (pts.size < 2) return meanEnergy(analysis)
+        val span = pts.last().time - pts.first().time
+        if (!span.isFinite() || span <= 0) return meanEnergy(analysis)
+        val lo = pts.first().time + span * DROP_EDGE_TRIM
+        val hi = pts.last().time - span * DROP_EDGE_TRIM
+        if (hi <= lo) return meanEnergy(analysis)
+        var best = Double.NEGATIVE_INFINITY
+        for (p in pts) {
+            if (p.time < lo || p.time > hi) continue
+            var sum = 0.0
+            var n = 0
+            for (q in pts) {
+                if (q.time >= p.time && q.time <= p.time + DROP_WINDOW_SECONDS) {
+                    sum += q.energy
+                    n++
+                }
+            }
+            if (n > 0 && sum / n > best) best = sum / n
+        }
+        return if (best.isFinite()) best else meanEnergy(analysis)
+    }
+
+    /**
+     * Share of the track under voice: mean of the vocal-activity mask. Null
+     * when the analyzer measured no mask, which reads as no opinion.
+     */
+    private fun vocalDensity(analysis: TrackAnalysis): Double? {
+        val mask = analysis.vocalActivityMask.filter { it.isFinite() && it >= 0 }
+        if (mask.isEmpty()) return null
+        return mask.sum() / mask.size
+    }
+
+    /** Clockwise wheel distance 0..11 on the same ring, or null when either key is unparseable or cross-ring. */
+    private fun wheelDelta(fromKey: String, toKey: String): Int? {
+        val (aNum, aMinor) = camelotOf(fromKey) ?: return null
+        val (bNum, bMinor) = camelotOf(toKey) ?: return null
+        if (aMinor != bMinor) return null
+        return ((bNum - aNum) % 12 + 12) % 12
+    }
+
+    /**
+     * Route term from the two-step key history: keep walking the wheel in the
+     * direction already established, punish an immediate reversal, punish
+     * A -> B -> A mode-flapping on one number. Only ±1 steps participate;
+     * anything farther has no route opinion (the boost rule owns +2).
+     */
+    private fun routeTerm(prevKey: String?, cursorKey: String, candKey: String): Double {
+        if (prevKey.isNullOrBlank()) return 0.0
+        val stepOf: (Int) -> Int? = { delta ->
+            when (delta) {
+                0 -> 0
+                1 -> 1
+                11 -> -1
+                else -> null
+            }
+        }
+        var term = 0.0
+        val d1 = wheelDelta(prevKey, cursorKey)?.let(stepOf)
+        val d2 = wheelDelta(cursorKey, candKey)?.let(stepOf)
+        if (d1 != null && d1 != 0 && d2 == d1) term += ROUTE_CONTINUE_BONUS
+        if (d1 != null && d1 != 0 && d2 != null && d2 == -d1) term -= ROUTE_REVERSAL_PENALTY
+        val prev = camelotOf(prevKey)
+        val cur = camelotOf(cursorKey)
+        val nxt = camelotOf(candKey)
+        if (prev != null && cur != null && nxt != null &&
+            prev.first == cur.first && cur.first == nxt.first &&
+            prev.second == nxt.second && prev.second != cur.second
+        ) term -= ROUTE_FLAP_PENALTY
+        return term
+    }
+
+    /** Deliberate +2 clockwise jump on the same ring: the energy-boost move. */
+    private fun isEnergyBoost(cursorKey: String, candKey: String): Boolean =
+        wheelDelta(cursorKey, candKey) == 2
+
+    /** The boost only fires where a lift belongs: PEAK everywhere, ARC near its top. */
+    private fun isPeakSlot(vibe: Vibe, slotFraction: Double): Boolean =
+        vibe == Vibe.PEAK || (vibe == Vibe.ARC && slotFraction in 0.5..0.8)
+
+    /**
      * Rearranges the tracks still to come into the highest-scoring chain, in
      * one edit — see [QueueShuffle.applyOrder] for why one edit and why a
      * permutation.
@@ -368,9 +506,9 @@ object HarmonicSort {
             ?.takeIf { it.isUsable }
         val vibe = AppSettings.harmonicVibe.value
         // Arc targets need comparable energies: min-max normalize the scope's
-        // mean energies to 0..1. A flat scope (or none measured) reads 0.5
-        // everywhere, which degrades exactly to the old pair-only greedy.
-        val rawEnergies = analyses.mapValues { (_, analysis) -> meanEnergy(analysis) }
+        // drop-window energies to 0..1. A flat scope (or none measured) reads
+        // 0.5 everywhere, which degrades exactly to the old pair-only greedy.
+        val rawEnergies = analyses.mapValues { (_, analysis) -> dropEnergy(analysis) }
         val finite = rawEnergies.values.filterNotNull().filter { it.isFinite() }
         val eMin = finite.minOrNull() ?: 0.0
         val eMax = finite.maxOrNull() ?: 0.0
@@ -378,10 +516,14 @@ object HarmonicSort {
             if (raw == null || !raw.isFinite() || eMax <= eMin) 0.5
             else ((raw - eMin) / (eMax - eMin)).coerceIn(0.0, 1.0)
         }
+        // Tempo trajectory: the set drifts from the anchor toward the scope
+        // median, so a smooth climb wins and a sawtooth pays per octave.
+        val anchorBpm = anchor?.bpm?.takeIf { it > 0 } ?: 0.0
+        val scopeBpms = analyses.values.mapNotNull { it.bpm.takeIf { b -> b > 0 } }
         val (mixSlots, ownSlots) = sortableSlots.partition { upcoming[it].fromAutoplay }
-        val sortedOwn = sortSection(ownSlots.map { upcoming[it] }, analyses, energies, anchor, vibe)
+        val sortedOwn = sortSection(ownSlots.map { upcoming[it] }, analyses, energies, anchor, vibe, anchorBpm, scopeBpms)
         val mixAnchor = sortedOwn.lastOrNull()?.let { analyses[it.mediaId] }?.takeIf { it.isUsable } ?: anchor
-        val sorted = sortedOwn + sortSection(mixSlots.map { upcoming[it] }, analyses, energies, mixAnchor, vibe)
+        val sorted = sortedOwn + sortSection(mixSlots.map { upcoming[it] }, analyses, energies, mixAnchor, vibe, anchorBpm, scopeBpms)
         // Back into slots: each sorted track takes the slot its predecessor in
         // the sorted order vacated, so non-scope tracks never shift.
         val positions = HashMap<String, ArrayDeque<Int>>(sortableSlots.size)
@@ -397,12 +539,15 @@ object HarmonicSort {
 
     /**
      * The highest-scoring chain through [tracks], greedy forward from [anchor] —
-     * but scored against the set arc, not just the last handover. At each step
-     * the winner maximizes `pairScore − λ·|energy − target|`: a great handover
-     * still beats the arc, but a pretty irrelevance no longer does. The slot
-     * fraction runs 0..1 across this section, so the curve lands where the
-     * listener is, not where measuring happened to finish. Unmeasurable tracks
-     * keep their relative order at the end, as before.
+     * but scored like a DJ thinks, not just like a blend sounds. At each step
+     * the winner maximizes
+     * `pair + route − tempoDrift + vocal − λ·|energy − target|`:
+     * blendability first, then keep walking the wheel the way it was going
+     * (with a deliberate +2 lift allowed at the peak), drift the tempo toward
+     * the set's own median instead of sawtoothing, and don't stack two vocal
+     * choruses. The slot fraction runs 0..1 across this section, so the curve
+     * lands where the listener is, not where measuring happened to finish.
+     * Unmeasurable tracks keep their relative order at the end, as before.
      */
     private fun sortSection(
         tracks: List<MediaItem>,
@@ -410,11 +555,17 @@ object HarmonicSort {
         energies: Map<String, Double>,
         anchor: TrackAnalysis?,
         vibe: Vibe,
+        anchorBpm: Double,
+        scopeBpms: List<Double>,
     ): List<MediaItem> {
         val (usable, failed) = tracks.partition { analyses[it.mediaId]?.isUsable == true }
         val ordered = ArrayList<MediaItem>(usable.size)
         val remaining = usable.toMutableList()
+        val medianBpm = scopeBpms.sorted().let { sorted ->
+            if (sorted.isEmpty()) 0.0 else sorted[sorted.size / 2]
+        }
         var cursor = anchor
+        var prev: TrackAnalysis? = null
         while (remaining.isNotEmpty()) {
             val slotFraction = if (usable.size <= 1) 0.0
                 else ordered.size.toDouble() / (usable.size - 1).toDouble()
@@ -436,20 +587,56 @@ object HarmonicSort {
             } else {
                 var best = 0
                 var bestScore = Double.NEGATIVE_INFINITY
+                var bestBoost: String? = null
+                // Tempo trajectory for this slot: from the anchor toward the
+                // scope median. No anchor, no median, no opinion.
+                val slotTempo = if (anchorBpm > 0 && medianBpm > 0) {
+                    anchorBpm + (medianBpm - anchorBpm) * slotFraction
+                } else 0.0
                 remaining.forEachIndexed { index, item ->
                     val candidate = analyses[item.mediaId] ?: return@forEachIndexed
-                    val pair = findBestCandidate(current, candidate)?.candidateScore
+                    val pair = findBestCandidate(current, candidate)
                         ?: return@forEachIndexed
+                    var score = pair.candidateScore
+                    var boost: String? = null
+                    // Energy-boost: a far key reads 0.0, but a deliberate +2 at
+                    // the peak with a locked tempo is a lift, not a clash.
+                    val bpmFit = (1.0 - pair.diff / pair.deviationCap).coerceIn(0.0, 1.0)
+                    if (isEnergyBoost(current.key, candidate.key) &&
+                        isPeakSlot(vibe, slotFraction) && bpmFit >= BOOST_MIN_BPM_FIT &&
+                        pair.keyFitScore < BOOST_KEY_SCORE
+                    ) {
+                        score += (BOOST_KEY_SCORE - pair.keyFitScore) * BOOST_KEY_WEIGHT
+                        boost = "${camelotLabel(current.key) ?: "?"}->${camelotLabel(candidate.key) ?: "?"}"
+                    }
+                    score += routeTerm(prev?.key, current.key, candidate.key)
+                    val candBpm = candidate.bpm
+                    if (slotTempo > 0 && candBpm > 0) {
+                        score -= TEMPO_TRAJECTORY_WEIGHT * abs(log2(candBpm / slotTempo))
+                    }
+                    val cursorVocal = vocalDensity(current)
+                    val candVocal = vocalDensity(candidate)
+                    if (cursorVocal != null && candVocal != null && cursorVocal > VOCAL_HEAVY) {
+                        score += if (candVocal > VOCAL_HEAVY) -VOCAL_STACK_PENALTY
+                        else if (candVocal < VOCAL_SPARSE) VOCAL_CLEAN_BONUS
+                        else 0.0
+                    }
                     val arcPenalty = VIBE_LAMBDA * abs((energies[item.mediaId] ?: 0.5) - target)
-                    val score = pair - arcPenalty
+                    score -= arcPenalty
                     if (score > bestScore) {
                         bestScore = score
                         best = index
+                        bestBoost = boost
                     }
                 }
-                remaining.removeAt(best)
+                val picked = remaining.removeAt(best)
+                if (bestBoost != null) {
+                    TrackLog.d("BitChord", "harmonic route: energy-boost $bestBoost @${(slotFraction * 100).toInt()}% peak", null)
+                }
+                picked
             }
             ordered += next
+            prev = cursor
             cursor = analyses[next.mediaId]?.takeIf { it.isUsable }
         }
         return ordered + failed
