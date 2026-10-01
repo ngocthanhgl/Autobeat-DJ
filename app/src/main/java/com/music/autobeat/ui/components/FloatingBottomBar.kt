@@ -234,7 +234,10 @@ fun FloatingBottomBar(
                     .then(
                         if (useGlass) Modifier.liquidGlass(shape = pillShape)
                         else Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
-                    ),
+                    )
+                    // Same hairline as the bar itself: keeps the selection
+                    // readable over near-white pages with nothing to refract.
+                    .border(GLASS_EDGE_WIDTH, GLASS_EDGE_COLOR, pillShape),
             )
         }
 

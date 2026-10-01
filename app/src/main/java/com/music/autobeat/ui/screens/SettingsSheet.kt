@@ -2040,9 +2040,10 @@ internal fun SettingsRow(
  * Every on/off toggle on this page through one door: the stock Material3
  * Switch with transparent tracks over liquid glass. The glass sits directly
  * on the Switch's own modifier — no wrapper, so the size is the stock size by
- * construction — and the checked track carries a translucent primary dye so
- * on and off read instantly. With glass disabled the tracks go back to flat
- * fills, pixel-for-pixel the Switch this replaced.
+ * construction — and it hugs the stadium track (50% rounding), never a
+ * circle halo around it. The checked track carries a translucent primary dye
+ * so on and off read instantly. With glass disabled the tracks go back to
+ * flat fills, pixel-for-pixel the Switch this replaced.
  */
 @Composable
 internal fun GlassSwitch(
@@ -2055,7 +2056,7 @@ internal fun GlassSwitch(
         checked = checked,
         onCheckedChange = onCheckedChange,
         modifier = modifier.lightweightLiquidGlass(
-            shape = CircleShape,
+            shape = RoundedCornerShape(percent = 50),
             fallbackColor = if (checked) MaterialTheme.colorScheme.primary
             else MaterialTheme.colorScheme.surfaceVariant,
         ),

@@ -2,7 +2,6 @@ package com.music.autobeat.ui.components
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
@@ -37,7 +36,6 @@ import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.CircularProgressIndicator
@@ -178,22 +176,6 @@ fun FrostedTopBar(
         animationSpec = tween(220),
         label = "topBarTitleAlpha",
     )
-    // Every bounded bar uses the same hairline, whether its pane is blurred or
-    // solid. A transparent artwork page has no pane edge for a line to mark —
-    // and neither does a feed sitting at its top: the divider only earns its
-    // place once content has scrolled underneath it.
-    val dividerColor by animateColorAsState(
-        targetValue = MaterialTheme.colorScheme.outline.copy(
-            alpha = when {
-                transparentBackdrop -> 0f
-                scrolled -> 0.6f
-                else -> 0f
-            },
-        ),
-        animationSpec = tween(220),
-        label = "topBarDivider",
-    )
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -358,7 +340,6 @@ fun FrostedTopBar(
                 }
             }
         }
-        HorizontalDivider(thickness = 0.5.dp, color = dividerColor)
         RefreshPuck(refreshing = refreshing, pullFraction = pullFraction)
     }
 }
@@ -582,7 +563,7 @@ fun TopBarAccountButton(
                     Icons.Rounded.Person,
                     contentDescription = stringResource(R.string.switch_account),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(24.dp),
                 )
             }
         }
@@ -676,4 +657,4 @@ private val PUCK_OVERSHOOT = 20.dp
  * Smaller than an icon's 24dp box: a filled circle carries more weight than a
  * glyph does, and at 24 it sat heavier in the bar than the wordmark opposite it.
  */
-private val AVATAR_SIZE = 28.dp
+private val AVATAR_SIZE = 44.dp

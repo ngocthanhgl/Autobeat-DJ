@@ -56,6 +56,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -108,6 +109,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.autobeat.data.settings.AppSettings
+import com.music.autobeat.ui.components.GLASS_EDGE_COLOR
+import com.music.autobeat.ui.components.GLASS_EDGE_WIDTH
 import com.music.autobeat.ui.components.GlassSpring
 import com.music.autobeat.ui.components.SQUASH
 import com.music.autobeat.ui.components.STRETCH
@@ -825,7 +828,12 @@ private fun SharedTransitionScope.ExpandedTabs(
                     .then(
                         (shapes.tabShape as? CornerBasedShape)?.let { Modifier.liquidGlass(it) }
                             ?: Modifier.background(colors.indicatorColor, shapes.tabShape),
-                    ),
+                    )
+                    // A hairline of its own: over a near-white page the blur
+                    // has nothing to refract and the pill would vanish into
+                    // it — the edge keeps the selection readable on Library
+                    // and Search exactly as on artwork-led tabs.
+                    .border(GLASS_EDGE_WIDTH, GLASS_EDGE_COLOR, shapes.tabShape),
             )
         }
 

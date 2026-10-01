@@ -1,4 +1,4 @@
-/*
+﻿/*
  * The bar's structure and its inline/expanded behaviour are
  * EchoMusicApp/Echo-Music's AppFloatingNavBar + FloatingMiniPlayer (GPL-3.0),
  * over the FloatingTabBar vendored in [com.music.autobeat.ui.components.floatingtabbar].
@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Pause
@@ -64,29 +63,11 @@ import com.music.autobeat.ui.haptics.Haptic
 import com.music.autobeat.ui.haptics.rememberHaptics
 
 /**
- * Glass for a tab glyph, painted directly on the icon so the cell measures
- * exactly as before — a wrapper box here once pushed the rows tall enough to
- * clip their own labels. The selected tab gets the full liquid glass, the
- * rest the lightweight tint with a transparent fallback, so with glass off
- * this is visually nothing at all.
+ * The tab glyphs carry no glass of their own: bare icons, with the sliding
+ * pill as the single selection marker. Kept as one function so the icon size
+ * lives in exactly one place.
  */
-@Composable
-private fun glassTabIcon(selected: Boolean): Modifier {
-    val useGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
-    return Modifier
-        .size(25.dp)
-        .clip(CircleShape)
-        .then(
-            if (selected && useGlass) {
-                Modifier.liquidGlass(CircleShape)
-            } else {
-                Modifier.lightweightLiquidGlass(
-                    shape = CircleShape,
-                    fallbackColor = Color.Transparent,
-                )
-            },
-        )
-}
+private fun glassTabIcon(): Modifier = Modifier.size(25.dp)
 
 /**
  * The liquid glass navigation bar: the iOS 26 shape where the now playing
@@ -236,7 +217,7 @@ fun GlassNavBar(
                             imageVector = tab.icon,
                             contentDescription = tab.label,
                             tint = tint,
-                            modifier = glassTabIcon(selected = isSelected),
+                            modifier = glassTabIcon(),
                         )
                     },
                     onClick = onClick,
@@ -249,7 +230,7 @@ fun GlassNavBar(
                             imageVector = tab.icon,
                             contentDescription = tab.label,
                             tint = tint,
-                            modifier = glassTabIcon(selected = isSelected),
+                            modifier = glassTabIcon(),
                         )
                     },
                     title = {
