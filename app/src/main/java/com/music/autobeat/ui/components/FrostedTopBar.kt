@@ -179,12 +179,15 @@ fun FrostedTopBar(
         label = "topBarTitleAlpha",
     )
     // Every bounded bar uses the same hairline, whether its pane is blurred or
-    // solid. A transparent artwork page has no pane edge for a line to mark.
+    // solid. A transparent artwork page has no pane edge for a line to mark —
+    // and neither does a feed sitting at its top: the divider only earns its
+    // place once content has scrolled underneath it.
     val dividerColor by animateColorAsState(
         targetValue = MaterialTheme.colorScheme.outline.copy(
             alpha = when {
                 transparentBackdrop -> 0f
-                else -> 0.6f
+                scrolled -> 0.6f
+                else -> 0f
             },
         ),
         animationSpec = tween(220),
@@ -389,7 +392,7 @@ private fun FloatingAppMark(
                 painter = painterResource(R.drawable.ic_logo),
                 contentDescription = null,
                 colorFilter = ColorFilter.tint(contentColor),
-                modifier = Modifier.size(width = 36.dp, height = 24.dp),
+                modifier = Modifier.size(width = 56.dp, height = 44.dp),
             )
         }
         if (BuildConfig.FLAVOR == "dev") {
