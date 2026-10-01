@@ -13,9 +13,10 @@ interface BrakeDiveFilters {
     /**
      * Advances the spinback sweep. [phase] 0..1 across the spin window, set
      * once per tick by the controller — the processor never steps it, so the
-     * sweep cannot restart mid-window.
+     * sweep cannot restart mid-window. [grabs] 1 = single pull, 2-3 =
+     * re-grabbed stutter (latched at spin start).
      */
-    fun spinTo(phase: Float)
+    fun spinTo(phase: Float, grabs: Int = 1)
 
     /** Rides the brake back to zero so the track resumes normal speed. */
     fun ride()
@@ -24,7 +25,7 @@ interface BrakeDiveFilters {
     object None : BrakeDiveFilters {
         override fun outgoing(amount: Float) = Unit
         override fun setBackspin(enabled: Boolean) = Unit
-        override fun spinTo(phase: Float) = Unit
+        override fun spinTo(phase: Float, grabs: Int) = Unit
         override fun ride() = Unit
     }
 }

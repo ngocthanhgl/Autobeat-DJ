@@ -1636,7 +1636,7 @@ class PlaybackService : MediaLibraryService() {
                 override fun outgoing(amount: Float) =
                     activeBrakeDive.setBrake(amount)
                 override fun setBackspin(enabled: Boolean) { activeBrakeDive.setBackspin(enabled) }
-                override fun spinTo(phase: Float) { activeBrakeDive.spinTo(phase) }
+                override fun spinTo(phase: Float, grabs: Int) { activeBrakeDive.spinTo(phase, grabs) }
                 override fun ride() = activeBrakeDive.ride()
             },
             analysisRunningFor = { item -> trackAnalyzer.isAnalysing(item.mediaId) },

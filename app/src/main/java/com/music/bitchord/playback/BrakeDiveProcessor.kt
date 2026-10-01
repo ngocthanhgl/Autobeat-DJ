@@ -6,6 +6,7 @@ import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.floor
 import kotlin.math.min
 
 /**
@@ -15,14 +16,18 @@ import kotlin.math.min
  * ramps it ~30x/s, which is the smoothing — no per-buffer glide needed).
  *
  * Backspin: a vinyl spinback. The controller sets the spin phase once per
- * tick across the 1s window (never re-armed mid-window), and this processor
- * reads its tap ring backwards continuously — reverse speed 0.5x → 4x with
- * linear interpolation, level held through the first half then diving. That
- * is the hand dragging the record back, not a power-off.
+ * tick across the energy-scaled window (1.5..2.5 s, never re-armed
+ * mid-window), and this processor reads its tap ring backwards
+ * continuously — reverse speed 0.5x → 4x with linear interpolation, level
+ * held through the first half then diving. That is the hand dragging the
+ * record back, not a power-off.
  *
- * The tap ring keeps the last 1.5s as float mono-mixed per channel, so both
+ * The tap ring keeps the last 6 s as float mono-mixed per channel, so both
  * PCM-16 and FLOAT_32 chains spin (the old Short ring bowed out on float,
- * which is what most modern outputs negotiate).
+ * which is what most modern outputs negotiate). 6 s because the mean
+ * reverse rate (~2.25x) over a 2.5 s window consumes ~5.6 s of source —
+ * anything shorter wraps into stale audio at the tail, which is exactly
+ * where the whip must stay razor.
  *
  * Processes buffers in place, exactly like [EchoSendProcessor].
  */
@@ -47,13 +52,19 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
     // what used to chop the reverse into sub-millisecond blips).
     @Volatile
     private var spinPhase: Float = -1f
+    // Hand on the record: 1 = one decisive pull, 2-3 = re-grabbed mid-spin.
+    // Latched at spin start (never mid-window — a changing grab count would
+    // jump the sweep phase).
+    @Volatile
+    private var spinGrabs: Int = 1
 
     private var encoding = C.ENCODING_INVALID
     private var channelCount = 0
     private var bytesPerFrame = 0
     private var sampleRate = 48000
-    // Tap ring, float interleaved, newest at ringPos. 1.5s covers the 1s spin
-    // window with half a second of run-up behind the hand hitting the record.
+    // Tap ring, float interleaved, newest at ringPos. 6 s covers the longest
+    // spin window (2.5 s at ~2.25x mean reverse ≈ 5.6 s of source) with
+    // run-up behind the hand hitting the record.
     private var ring = FloatArray(0)
     private var ringFrames = 0
     private var ringPos = 0
@@ -80,12 +91,14 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
     }
 
     /** Advances the spinback sweep. [phase] 0..1 across the spin window. */
-    fun spinTo(phase: Float) {
+    fun spinTo(phase: Float, grabs: Int = 1) {
         val p = phase.coerceIn(0f, 1f)
         if (spinPhase < 0f) {
             // Spin start: seat the cursor on the newest tapped frame so the
-            // rewind begins exactly where the forward play was.
+            // rewind begins exactly where the forward play was, and latch
+            // the hand for the whole sweep.
             reversePos = ringPos.toFloat()
+            spinGrabs = grabs.coerceIn(1, 4)
         }
         spinPhase = p
     }
@@ -108,7 +121,7 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
         channelCount = inputAudioFormat.channelCount
         sampleRate = inputAudioFormat.sampleRate
         bytesPerFrame = (if (encoding == C.ENCODING_PCM_FLOAT) 4 else 2) * channelCount
-        ringFrames = (sampleRate * 1.5).toInt().coerceAtLeast(48000)
+        ringFrames = (sampleRate * 6.0).toInt().coerceAtLeast(48000)
         ring = FloatArray(ringFrames * channelCount)
         ringPos = 0
         ringFilled = 0
@@ -202,15 +215,26 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
      * with linear interpolation between frames, so the ear hears one
      * continuous rewind sweep instead of stepped chirps. Level holds through
      * the first half (a real hand keeps the fader up while it drags) then
-     * dives into the cut.
+     * dives toward the cut — but never below a quarter, so the whip's tail
+     * stays audible into the flip instead of being buried under it.
      */
     private fun renderSpin(outputBuffer: ByteBuffer, frameCount: Int) {
-        val phase = spinPhase.coerceIn(0f, 1f)
+        // The hand, mapped through the grab stutter: each grab accelerates
+        // then hesitates (smoothstep per segment), so 2-3 grabs read as the
+        // hand re-catching the record instead of one clean pull.
+        val grabs = spinGrabs.coerceIn(1, 4)
+        val raw = spinPhase.coerceIn(0f, 1f)
+        val f = (raw * grabs).coerceIn(0f, grabs.toFloat())
+        val seg = floor(f).toInt().coerceAtMost(grabs - 1)
+        var fr = (f - seg).coerceIn(0f, 1f)
+        fr = fr * fr * (3f - 2f * fr)
+        val phase = ((seg + fr) / grabs).coerceIn(0f, 1f)
         // 0.5x -> 4x across the window: the drag starts under the music and
         // ends whipping past it.
         val revSpeed = SPIN_START_SPEED + phase * (SPIN_END_SPEED - SPIN_START_SPEED)
-        // Hold ~80% through the first half, dive to ~10% at the cut.
-        val gain = if (phase < 0.5f) 0.8f else (0.8f * (1f - (phase - 0.5f) * 1.75f)).coerceAtLeast(0.1f)
+        // Hold ~80% through the first half, dive toward the cut with the
+        // tail still speaking (0.25 floor — the old 0.1 buried the whip).
+        val gain = if (phase < 0.5f) 0.8f else (0.8f * (1f - (phase - 0.5f) * 1.5f)).coerceAtLeast(0.25f)
         outputBuffer.order(ByteOrder.nativeOrder())
         repeat(frameCount) {
             reversePos -= revSpeed

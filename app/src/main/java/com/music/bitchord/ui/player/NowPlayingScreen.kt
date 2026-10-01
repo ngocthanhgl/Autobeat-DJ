@@ -47,7 +47,6 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -142,7 +141,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -166,9 +164,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -7071,13 +7067,9 @@ private fun Modifier.fadingEdges(): Modifier = this
     }
 
 /**
- * The Harmonic Sort arc picker: a chip per vibe plus a curve preview. The
- * shape — climb, plateau, arc, descent, floor — reads at a glance, which a
- * name alone doesn't. Shown only while the sort holds the queue.
- *
- * Collapsed to one line by default (curve + current vibe chip, tap to open
- * the full chip row): the queue is for reading tracks, and the picker was
- * eating a whole track slot.
+ * The Harmonic Sort vibe picker, flattened to one scrolling chip strip: a
+ * button per vibe title, nothing else. The curve preview read nicely but ate
+ * a track slot in the queue; the titles alone pick the arc.
  */
 @Composable
 private fun VibeRow(
@@ -7085,64 +7077,27 @@ private fun VibeRow(
     onSelect: (HarmonicSort.Vibe) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    Column(modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(percent = 50))
-                .clickable(onClick = { expanded = !expanded })
-                .padding(vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HarmonicSort.Vibe.entries.forEach { entry ->
+            val selected = entry == vibe
             Text(
-                text = stringResource(R.string.harmonic_vibe),
+                text = vibeLabel(entry),
                 style = MaterialTheme.typography.labelLarge,
-                color = Color.White.copy(alpha = 0.6f),
-            )
-            Spacer(Modifier.width(8.dp))
-            ArcPreview(
-                vibe = vibe,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(if (expanded) 30.dp else 20.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = vibeLabel(vibe),
-                style = MaterialTheme.typography.labelLarge,
-                color = Color(0xFF4ADE80),
+                color = if (selected) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.6f),
                 modifier = Modifier
                     .clip(RoundedCornerShape(percent = 50))
-                    .background(Color(0xFF4ADE80).copy(alpha = 0.14f))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-        }
-        if (expanded) {
-            Spacer(Modifier.height(6.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                HarmonicSort.Vibe.entries.forEach { entry ->
-                    val selected = entry == vibe
-                    Text(
-                        text = vibeLabel(entry),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (selected) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.6f),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(percent = 50))
-                            .background(
-                                if (selected) Color(0xFF4ADE80).copy(alpha = 0.14f)
-                                else Color.White.copy(alpha = 0.06f),
-                            )
-                            .clickable(onClick = { onSelect(entry) })
-                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                    .background(
+                        if (selected) Color(0xFF4ADE80).copy(alpha = 0.14f)
+                        else Color.White.copy(alpha = 0.06f),
                     )
-                }
-            }
+                    .clickable(onClick = { onSelect(entry) })
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+            )
         }
     }
 }
@@ -7155,34 +7110,6 @@ private fun vibeLabel(vibe: HarmonicSort.Vibe): String = when (vibe) {
     HarmonicSort.Vibe.COOL_DOWN -> stringResource(R.string.harmonic_vibe_cool_down)
     HarmonicSort.Vibe.LATE_NIGHT -> stringResource(R.string.harmonic_vibe_late_night)
 }
-
-/**
- * The vibe's target curve, sampled live from [HarmonicSort.targetEnergy] so
- * the preview can never drift from what the sorter actually optimizes.
- */
-@Composable
-private fun ArcPreview(
-    vibe: HarmonicSort.Vibe,
-    modifier: Modifier = Modifier,
-) {
-    Canvas(modifier = modifier) {
-        val steps = 48
-        val path = Path()
-        for (i in 0..steps) {
-            val t = i.toFloat() / steps
-            val energy = HarmonicSort.targetEnergy(vibe, t.toDouble()).toFloat()
-            val x = t * size.width
-            val y = size.height - energy * size.height
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(
-            path = path,
-            color = Color(0xFF4ADE80).copy(alpha = 0.9f),
-            style = Stroke(width = 2.dp.toPx()),
-        )
-    }
-}
-
 /** The live queue, in the player itself. */
 @Composable
 private fun InlineQueue(
@@ -7302,9 +7229,8 @@ private fun InlineQueue(
             )
         }
         // The set arc picker: only while Harmonic Sort holds the queue, since
-        // the vibe is its parameter, not the queue's. A chip row plus a curve
-        // preview — the shape (climb, plateau, arc, descent, floor) reads at
-        // a glance, which a name alone doesn't.
+        // the vibe is its parameter, not the queue's. One scrolling chip
+        // strip, nothing else.
         if (harmonicActive) {
             Spacer(Modifier.height(6.dp))
             VibeRow(

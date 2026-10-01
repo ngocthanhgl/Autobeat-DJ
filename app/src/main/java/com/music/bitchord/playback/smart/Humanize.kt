@@ -17,8 +17,10 @@ import kotlin.random.Random
  * harmonic math (key shift) are never touched — only the ride differs.
  *
  * Two deliberate limits:
- * - Surgical/structural voices stay deterministic: PLAIN_DISSOLVE, HARD_CUT,
- *   LOOP_CUT_DROP, LOOP_ROLL and GAPLESS return the plan untouched. A cut is
+ * - Surgical/structural voices stay deterministic on timing: PLAIN_DISSOLVE,
+ *   HARD_CUT and GAPLESS return the plan untouched, and LOOP_CUT_DROP /
+ *   LOOP_ROLL take only the effect-intensity scales (a jittered loop length
+ *   would desync the vamp schedule the renderer already armed). A cut is
  *   a cut; jittering its timing reads as sloppy, not human.
  * - Draws roll once per pair and are re-applied to every per-tick re-plan.
  *   [planTransition] runs every tick while the window is open, so re-rolling
@@ -56,6 +58,11 @@ data class HumanDraws(
     val swapDelta: Double,
     /** Wildcard move: \"throw\", \"brake\", \"backspin\", or null. */
     val wildcard: String?,
+    /**
+     * Backspin hand: 1 = one decisive pull, 2-3 = the hand re-grabbing
+     * mid-spin. Only voiced on backspin plans; ignored everywhere else.
+     */
+    val spinGrabs: Int,
 )
 
 /** Wildcard fire rate per eligible blend. */
@@ -73,31 +80,35 @@ fun humanizePlan(
     st: HumanizeState,
     pairKey: String,
 ): Pair<TransitionPlan, String?> {
-    if (plan.transitionStyle != TransitionStyle.DJ_BLEND &&
-        plan.transitionStyle != TransitionStyle.DJ_FILTER &&
-        plan.transitionStyle != TransitionStyle.ECHO_REVERB_OUT
-    ) {
+    val isBlend = plan.transitionStyle == TransitionStyle.DJ_BLEND ||
+        plan.transitionStyle == TransitionStyle.DJ_FILTER ||
+        plan.transitionStyle == TransitionStyle.ECHO_REVERB_OUT
+    // Loop voices take the wet scales only (below): their lengths are already
+    // armed into the vamp schedule, so timing draws would desync the renderer.
+    val isLoop = plan.transitionStyle == TransitionStyle.LOOP_CUT_DROP ||
+        plan.transitionStyle == TransitionStyle.LOOP_ROLL
+    if (!isBlend && !isLoop && !plan.backspin) {
         return plan to null
     }
     val outBeatSec = out?.beatInterval?.takeIf { it > 0.0 }
         ?: out?.bpm?.takeIf { it > 0.0 }?.let { 60.0 / it }
     // No grid, no beat draws — but the level draws can still apply.
-    val draws = if (st.pairDrawsFor == pairKey) {
-        st.draws ?: return plan to null
-    } else {
-        st.mixes += 1
-        if (st.wildcardCooldown > 0) st.wildcardCooldown -= 1
-        val rolled = rollDraws(plan, out, next, outBeatSec, st, pairKey)
-        st.pairDrawsFor = pairKey
-        st.draws = rolled
-        rolled
+    val draws = drawsFor(plan, out, next, outBeatSec, st, pairKey) ?: return plan to null
+
+    // Backspin plans: the hand only. Timing, rate and cue are the spin's own
+    // geometry (window, drop landing); the one human axis is single pull vs
+    // re-grabbed stutter.
+    if (plan.backspin) {
+        if (draws.spinGrabs <= 1) return plan to null
+        return plan.copy(spinGrabs = draws.spinGrabs) to "seed=${st.mixes} grabs=${draws.spinGrabs}"
     }
 
     var humanized = plan
     val notes = mutableListOf<String>()
 
     // R1a: overlap ±2 outgoing beats, clamped to planner-plausible rails.
-    if (outBeatSec != null && draws.fadeDeltaBeats != 0) {
+    // Skipped on loop voices (lengths already armed into the vamp schedule).
+    if (isBlend && outBeatSec != null && draws.fadeDeltaBeats != 0) {
         val before = humanized.fadeSeconds
         val nudged = (before + draws.fadeDeltaBeats * outBeatSec)
             .coerceIn(maxOf(2.0, before * 0.6), minOf(40.0, before * 1.4))
@@ -112,13 +123,14 @@ fun humanizePlan(
     }
     // R1b: rate push/pull, ±0.15 % — a DJ leaning on the pitch, inaudible as
     // pitch, felt as life. Inside the DJ ±2 % rails by two orders of magnitude.
-    if (draws.rateDelta != 0.0 && humanized.incomingPlaybackRate > 0.0) {
+    // Blends only: loop voices keep the planner's exact cue/rate geometry.
+    if (isBlend && draws.rateDelta != 0.0 && humanized.incomingPlaybackRate > 0.0) {
         val before = humanized.incomingPlaybackRate
         humanized = humanized.copy(incomingPlaybackRate = before * (1.0 + draws.rateDelta))
         notes += "rate ×${"%.4f".format(1.0 + draws.rateDelta)}"
     }
-    // R1c: cue to the nearest downbeat within ±1 beat.
-    if (draws.cueSnap && outBeatSec != null && next != null) {
+    // R1c: cue to the nearest downbeat within ±1 beat. Blends only.
+    if (isBlend && draws.cueSnap && outBeatSec != null && next != null) {
         val snapped = snapCueToGrid(humanized.incomingCueTime, next, outBeatSec)
         if (snapped != null && snapped != humanized.incomingCueTime) {
             val drift = snapped - humanized.incomingCueTime
@@ -140,16 +152,17 @@ fun humanizePlan(
         humanized = humanized.copy(filterSweep = humanized.filterSweep * draws.sweepScale)
         notes += "sweep ×${"%.2f".format(draws.sweepScale)}"
     }
-    if (draws.swapDelta != 0.0) {
+    if (isBlend && draws.swapDelta != 0.0) {
         humanized = humanized.copy(
             bassSwapFraction = (humanized.bassSwapFraction + draws.swapDelta).coerceIn(0.5, 0.9),
         )
     }
 
     // R2: the wildcard. Within-type arms only — same voice, one unplanned
-    // punctuation. The renderer's effect bookkeeping (blendsSinceEffect)
+    // punctuation. Blends only: never stack onto a loop or a spin.
+    // The renderer's effect bookkeeping (blendsSinceEffect)
     // reads the armed fields off the render, so cooldowns follow for free.
-    when (draws.wildcard) {
+    if (isBlend) when (draws.wildcard) {
         "throw" -> {
             humanized = humanized.copy(
                 echoThrow = true,
@@ -171,6 +184,29 @@ fun humanizePlan(
     return humanized to "$seedNote ${notes.joinToString(" ")}"
 }
 
+/**
+ * Pair-stable draws: roll once per pair, re-apply to every per-tick re-plan.
+ * Null only when a previous roll already declined (no draws cached).
+ */
+private fun drawsFor(
+    plan: TransitionPlan,
+    out: TrackAnalysis?,
+    next: TrackAnalysis?,
+    outBeatSec: Double?,
+    st: HumanizeState,
+    pairKey: String,
+): HumanDraws? {
+    if (st.pairDrawsFor == pairKey) {
+        return st.draws
+    }
+    st.mixes += 1
+    if (st.wildcardCooldown > 0) st.wildcardCooldown -= 1
+    val rolled = rollDraws(plan, out, next, outBeatSec, st, pairKey)
+    st.pairDrawsFor = pairKey
+    st.draws = rolled
+    return rolled
+}
+
 private fun rollDraws(
     plan: TransitionPlan,
     out: TrackAnalysis?,
@@ -189,6 +225,9 @@ private fun rollDraws(
         sweepScale = 0.8 + rng.nextDouble() * 0.45,
         swapDelta = (rng.nextDouble() - 0.5) * 0.16,
         wildcard = rollWildcard(plan, out, next, outBeatSec, st, rng),
+        // The hand: one decisive pull most plays, a re-grabbed stutter on
+        // some — pair-stable like every other draw.
+        spinGrabs = if (rng.nextDouble() < 0.30) rng.nextInt(2, 4) else 1,
     )
 }
 

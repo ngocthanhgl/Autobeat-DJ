@@ -424,12 +424,17 @@ class CrossfadeController(
          */
         val brake: Boolean = false,
         /**
-         * Booth backspin (DJ-only): the same dive DSP as [brake], compressed
-         * to the last [BACKSPIN_WINDOW_MS] with a steeper curve — a spin-back
-         * into a hard cut, not a long slowdown. Implied by the plan alongside
-         * brake + echoThrow; the cooldown strips all three together.
+         * Booth backspin (DJ-only): the same dive DSP as [brake], over the
+         * energy-scaled [spinSeconds] window with a steeper curve — a
+         * spin-back into the cut, not a long slowdown. Implied by the plan
+         * alongside brake + echoThrow; the cooldown strips all three
+         * together. [spinGrabs] stutters the sweep when the hand re-grabs.
          */
         val backspin: Boolean = false,
+        /** Booth backspin: spin window length in seconds, from the plan. */
+        val spinSeconds: Double = 1.0,
+        /** Booth backspin: 1 = single pull, 2-3 = re-grabbed stutter. */
+        val spinGrabs: Int = 1,
         /** DJ-EQ spec: false = leave both decks at unity (standard fades). */
         val eqEnabled: Boolean = false,
         /**
@@ -505,10 +510,10 @@ class CrossfadeController(
     private var pendingReverbCloseStartMs = -1L
     // DJ brake (F2): last committed brake rate, for coalesced per-tick ramps.
     private var lastBrakeRate: Float = 1f
-    // Booth backspin: the spin-back dive occupies the last second of the
-    // outgoing deck, whatever the blend span. Shorter than a brake by
-    // construction — a backspin plan is a ~1 s pre-roll, never a long bed.
-    private val BACKSPIN_WINDOW_MS = 1000L
+    // Booth backspin: the spin-back dive occupies the energy-scaled tail of
+    // the outgoing deck (1.5..2.5 s from the plan), whatever the blend span.
+    // Longer than a brake by construction — a backspin plan is a real
+    // booth pull, never a 1 s blip.
     private val EFFECT_COOLDOWN_BLENDS = 2
     // F3 rotation: smart blends since the last effected one. The planner is
     // pure and cannot count, so this counter enforces the cooldown at Render
@@ -1716,6 +1721,8 @@ class CrossfadeController(
                 mixset = mixset,
                 brake = plan.brake && effectAllowed,
                 backspin = plan.backspin && effectAllowed,
+                spinSeconds = plan.spinSeconds,
+                spinGrabs = plan.spinGrabs,
                 mixRecipe = mixRecipe,
                 duckAMids = duckAMids,
                 delayBMids = delayBMids,
@@ -2660,13 +2667,14 @@ class CrossfadeController(
         // step down up to 6% when the pair needed a stretch — the stretch is
         // exactly what the brake replaces, and the step lands deep in the
         // blend under a falling dry path. Incoming deck untouched.
-        // Booth backspin: same DSP, compressed to the last BACKSPIN_WINDOW_MS
+        // Booth backspin: same DSP, over the plan's energy-scaled window
         // with a cubic curve — a hand-dragged spin-back into the cut, not a
         // power-off. The ½-beat dub tail (echoThrow) covers the hole while
         // the deck dies; the handoff lands the drop at full energy.
         if (render.mixset && render.brake && effSpan > 1L) {
+            val spinWindowMs = (render.spinSeconds * 1000.0).toFloat().coerceAtLeast(500f)
             val windowStart = if (render.backspin) {
-                max(0f, 1f - BACKSPIN_WINDOW_MS.toFloat() / effSpan.toFloat())
+                max(0f, 1f - spinWindowMs / effSpan.toFloat())
             } else {
                 0.75f
             }
@@ -2681,7 +2689,7 @@ class CrossfadeController(
                 // Energy fix P1-2 still holds: real DJs keep the fader up
                 // through a spin-back, so no forward duck stacks onto the
                 // sweep — the spin's own envelope owns the level.
-                brakeDiveFilters.spinTo(t)
+                brakeDiveFilters.spinTo(t, render.spinGrabs)
             } else if (render.brake && outProgress >= windowStart) {
                 val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
                 brakeDiveFilters.outgoing(t * 0.85f)
@@ -3410,12 +3418,16 @@ class CrossfadeController(
                 } else {
                     (1f - progress) * 24f
                 }
+                // CDJ roll: start at 2 beats, halve 2→1→½→¼ keyed off
+                // remaining beats. A bar-plus of static 4-beat looping reads
+                // as a stuck disc, not a build — the roll must tighten from
+                // its first wrap, with the ¼-beat stutter landing the flip.
                 val loopBeats = when {
-                    remainingBeats > 12f -> 0f
-                    remainingBeats > 4.5f -> 4f
-                    remainingBeats > 2.5f -> 2f
-                    remainingBeats > 1.5f -> 1f
-                    else -> 0.5f
+                    remainingBeats > 8f -> 0f
+                    remainingBeats > 4f -> 2f
+                    remainingBeats > 2f -> 1f
+                    remainingBeats > 1f -> 0.5f
+                    else -> 0.25f
                 }
                 if (loopBeats != lastLoopBeats && render.loopBeatSeconds > 0) {
                     lastLoopBeats = loopBeats
@@ -3475,7 +3487,7 @@ class CrossfadeController(
                 reverbFilters.open()
             }
             // Loop-roll extend (Issue 1): same booth vamp as the cut — the
-            // phrase halves (4→2→1→½ keyed off remaining beats in the longer
+            // phrase halves (2→1→½→¼ keyed off remaining beats in the longer
             // window) while B blends in — but instead of a freeze + chop the
             // loop releases over the last 2 beats (the renderer's INSTANT
             // settle glides the volumes) with a rising HP + echo wash.
@@ -3485,12 +3497,14 @@ class CrossfadeController(
                 } else {
                     (1f - progress) * 24f
                 }
+                // Same CDJ roll as the cut: 2→1→½→¼, tightening from the
+                // first wrap instead of sitting on a static 4-beat chunk.
                 val loopBeats = when {
-                    remainingBeats > 12f -> 0f
-                    remainingBeats > 4.5f -> 4f
-                    remainingBeats > 2.5f -> 2f
-                    remainingBeats > 1.5f -> 1f
-                    else -> 0.5f
+                    remainingBeats > 8f -> 0f
+                    remainingBeats > 4f -> 2f
+                    remainingBeats > 2f -> 1f
+                    remainingBeats > 1f -> 0.5f
+                    else -> 0.25f
                 }
                 if (loopBeats != lastLoopBeats && render.loopBeatSeconds > 0) {
                     lastLoopBeats = loopBeats

@@ -27,6 +27,7 @@ import com.music.bitchord.data.settings.AppSettings
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.isFinite
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -318,13 +319,26 @@ data class TransitionPlan(
      */
     val brake: Boolean = false,
     /**
-     * Booth backspin (DJ-only): the outgoing deck spins back over ~1 s into
+     * Booth backspin (DJ-only): the outgoing deck spins back over an
+     * energy-scaled window ([spinSeconds], 1.5..2.5 s) into
      * a hard cut that lands the incoming track on its trusted drop at full
      * energy — the booth punctuation for a heavy lift across a proven key
      * clash. Implies [brake] + [echoThrow] (½-beat dub tail); the renderer
-     * compresses the dive window to the spin. False everywhere else.
+     * sizes the dive window off [spinSeconds]. False everywhere else.
      */
     val backspin: Boolean = false,
+    /**
+     * Backspin window length in seconds, scaled from the outgoing tail's
+     * energy (1.5 on a soft exit, 2.5 on a peak one). A real booth pull lasts
+     * 2-3 s; the old fixed 1 s never gave the ear time to feel the rewind.
+     */
+    val spinSeconds: Double = 1.0,
+    /**
+     * Human multi-grab: 1 = one decisive pull, 2-3 = the hand re-grabbing
+     * mid-spin (a Humanize draw, pair-stable). Voiced in the sweep phase
+     * mapping, never in the timing.
+     */
+    val spinGrabs: Int = 1,
     /** Blueprint §5.7 LOOP_CUT_DROP: how many bars of the outgoing tail loop before the freeze. */
     val loopBars: Int = 0,
     /** Blueprint §5.7 LOOP_CUT_DROP: where the incoming track lands, on its own timeline. */
@@ -836,11 +850,11 @@ private fun hardCutPlan(
 
 /**
  * Booth backspin (DJ-only): the outgoing deck plays to the phrase end, spins
- * back over its last [BACKSPIN_SPIN_SECONDS], and hard-cuts onto the incoming
+ * back over its last [TransitionPlan.spinSeconds], and hard-cuts onto the incoming
  * track's trusted drop at full energy. Typed LOOP_CUT_DROP with loopBars = 0:
  * an honest cut onto a drop with no vamp — the spin IS the transition — so
  * the guaranteed-blend floor (which exempts LOOP_CUT_DROP, not HARD_CUT)
- * lets the ~1 s pre-roll stand. Rendered with the HARD_CUT style (open
+ * lets the energy-scaled pre-roll stand. Rendered with the HARD_CUT style (open
  * filters, stepped volume, 1-beat LP sweep into the flip) and no vamp (the
  * vamp keys off loopBars). The renderer compresses the brake dive to the
  * spin window, rings a ½-beat dub tail on the outgoing channel while it
@@ -861,9 +875,12 @@ private fun backspinPlan(
     val beatSeconds = analysis.beatInterval.orZero().takeIf { it > 0 }
         ?: if (analysis.bpm.orZero() > 0) 60 / analysis.bpm else 0.5
     val cutAt = mixAnchor.coerceIn(0.0, length)
+    // Energy-scaled window: a hotter exit earns a longer pull (1.5..2.5 s).
+    // A real booth spinback reads at 2-3 s; 1 s never lets the ear feel it.
+    val spinSeconds = spinSecondsFor(analysis, cutAt)
     val spinStart = (
-        nearestTimedValue(analysis.downbeats, cutAt - BACKSPIN_SPIN_SECONDS, tolerance = beatSeconds * 2)
-            ?: (cutAt - BACKSPIN_SPIN_SECONDS)
+        nearestTimedValue(analysis.downbeats, cutAt - spinSeconds, tolerance = beatSeconds * 2)
+            ?: (cutAt - spinSeconds)
         ).coerceIn(0.0, cutAt)
     // The drop is the landing: keep it clear of the track tail.
     val maxCue = nextLength - MIN_INCOMING_CLEARANCE_SECONDS
@@ -881,6 +898,7 @@ private fun backspinPlan(
         type = TransitionType.LOOP_CUT_DROP,
         score = score,
         backspin = true,
+        spinSeconds = spinSeconds,
         brake = true,
         echoThrow = true,
         echoAmount = ECHO_THROW_WET,
@@ -1983,8 +2001,19 @@ private fun brakeForSlowdown(
 
 /** Heavy-lift floor for a backspin: the raw speedup ratio past keylock comfort. */
 private const val BACKSPIN_MIN_LIFT_RATIO = 1.04
-/** Backspin pre-roll: the outgoing deck spins back over its last second. */
-private const val BACKSPIN_SPIN_SECONDS = 1.0
+/** Backspin pre-roll: scaled from the outgoing tail's energy, 1.5..2.5 s. */
+private fun spinSecondsFor(analysis: TrackAnalysis, anchor: Double): Double {
+    val curve = analysis.energyCurve
+    if (curve.isNullOrEmpty()) return 2.0
+    // Tail 8 s before the anchor: a hotter exit earns a longer pull.
+    val tail = curve.filter { it.time.isFinite() && it.time in (anchor - 8.0)..anchor }
+    val pool = if (tail.size >= 4) tail else curve
+    val energies = pool.map { it.energy }.filter { it.isFinite() && it >= 0.0 }
+    if (energies.isEmpty()) return 2.0
+    val mean = energies.sum() / energies.size
+    val max = energies.max().coerceAtLeast(1e-6)
+    return 1.5 + 1.0 * (mean / max).coerceIn(0.0, 1.0)
+}
 /** Backspin dub tail on the outgoing channel while it spins (½ beat). */
 private const val BACKSPIN_ECHO_PERIOD_BEATS = 0.5
 
