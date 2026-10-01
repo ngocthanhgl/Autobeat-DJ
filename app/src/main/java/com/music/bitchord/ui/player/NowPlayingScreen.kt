@@ -227,6 +227,7 @@ import com.music.bitchord.ui.theme.SystemBarIcons
 import com.music.bitchord.ui.rememberIsForeground
 import com.music.bitchord.ui.LyricsProviderState
 import com.music.bitchord.ui.components.thumbnailBorder
+import com.music.bitchord.ui.components.TopFadeBlur
 import com.music.bitchord.ui.components.optimizedHazeEffect
 import com.music.bitchord.ui.components.AudioPipelineDialog
 import com.music.bitchord.ui.haptics.Haptic
@@ -2483,20 +2484,18 @@ fun NowPlayingScreen(
             // directly behind them — a bright frame or a pale sleeve leaves the
             // top of the screen unreadable. Faded in with the banner and gone
             // with it.
+            //
+            // A real progressive frost, not a black gradient: the old two-stop
+            // scrim ended in a visible line across bright sleeves (the "black
+            // border" under the status bar) and banded on OLED. TopFadeBlur
+            // ramps actual blur to nothing with an eased 12-stop scrim, so
+            // there is no edge left to find.
             if (heroVisible > 0.01f) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .fillMaxWidth()
-                        .height(statusBarTop + topStrip)
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    Color.Black.copy(alpha = 0.38f * heroVisible),
-                                    Color.Transparent,
-                                ),
-                            ),
-                        ),
+                TopFadeBlur(
+                    hazeState = playerHaze,
+                    pageColor = Color.Transparent,
+                    scrimColor = Color.Black,
+                    modifier = Modifier.align(Alignment.TopStart),
                 )
             }
         }
@@ -8088,8 +8087,11 @@ private fun KeyBpmRow(
     }
     Row(
         modifier = modifier
+            // Opaque enough to read Camelot colors off bright sleeves, still
+            // glass: the blur shows through, the fill just gives it a floor.
+            .border(0.5.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(percent = 50))
             .thumbnailBorder(RoundedCornerShape(percent = 50))
-            .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(percent = 50))
+            .background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(percent = 50))
             .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
