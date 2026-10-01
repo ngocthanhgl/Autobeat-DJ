@@ -978,6 +978,17 @@ class PlaybackService : MediaLibraryService() {
                 if (exoPlayer.currentMediaItem?.mediaId == lastTimelineCurrentId) {
                     crossfade?.onQueueReordered()
                 }
+                // Harmonic top-up: user inserts, autoplay and infinity
+                // refills, radio handoffs — every one of them lands here as
+                // PLAYLIST_CHANGED, so the rolling 20-ahead just wakes and
+                // measures the newcomers. No-op unless sorting and parked.
+                if (HarmonicSort.isActive) {
+                    HarmonicSort.topUp(
+                        exoPlayer,
+                        HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+                        current = { player },
+                    )
+                }
                 updateAnalysisPriority(exoPlayer)
             }
         }

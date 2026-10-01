@@ -27,9 +27,12 @@ import kotlin.math.abs
  * as [QueueShuffle], but the order is earned by measurement rather than drawn
  * by chance.
  *
- * Turning it on snapshots the queue, measures the key and tempo of the tracks
- * still to come (at most [MAX_SORT_AHEAD] of them), and rearranges those into
- * the chain where each handover scores highest — the same pair scorer the DJ
+ * Turning it on snapshots the queue, measures the key and tempo of the
+ * twenty tracks still to come, and keeps measuring as the queue moves: a
+ * finished track sliding out or a refill sliding in just becomes the next
+ * pass, so the twenty ahead stay measured — user inserts, autoplay and
+ * infinity refills included. Every answer rearranges the window into the
+ * chain where each handover scores highest — the same pair scorer the DJ
  * planner trusts ([findBestCandidate]), run greedily forward from the track
  * that is playing. Turning it off puts the queue back the way it was found.
  *
@@ -122,8 +125,15 @@ object HarmonicSort {
 
     /** Media ids in their pre-sort order. Empty while the sort is off. */
     private var original: List<String> = emptyList()
-    /** The measured scope, kept so a vibe change can re-sort without re-measuring. */
+    /**
+     * The measured scope, kept so a vibe change can re-sort without
+     * re-measuring. Only grows while the sort is on: every live 20-ahead
+     * window folds in, so refills stay sortable without a second pass over
+     * the tracks already placed.
+     */
     private var scopeIds: List<String> = emptyList()
+    /** Ids this activation already attempted: unmeasurable ones park here so the drain never spins on them. */
+    private val attempted = mutableSetOf<String>()
     private var worker: Job? = null
     private var generation = 0
 
@@ -176,36 +186,102 @@ object HarmonicSort {
             return
         }
         this.scopeIds = scopeIds
+        attempted.clear()
         _active.value = true
         _progress.value = Progress(0, scopeIds.size)
-        val myGeneration = ++generation
+        generation++
+        startWorker(deps, current)
+    }
+
+    /**
+     * Wakes the measuring worker when the queue grows under an active sort —
+     * a user insert, an autoplay or infinity refill, a radio handoff. No-op
+     * while the sort is off or the worker is already draining: measuring is
+     * sequential, so there is ever exactly one.
+     */
+    fun topUp(player: Player, deps: Deps, current: () -> Player? = { player }) {
+        if (!_active.value) return
+        if (worker?.isActive == true) return
+        startWorker(deps, current)
+    }
+
+    private fun startWorker(deps: Deps, current: () -> Player?) {
+        val myGeneration = generation
         worker = deps.scope.launch {
-            TrackLog.d("BitChord", "harmonic worker started scope=${scopeIds.size}", null)
-            for ((index, id) in scopeIds.withIndex()) {
-                if (myGeneration != generation) return@launch
-                // Guarded per track: one unmeasurable id must not take the
-                // other nineteen down with it, silently or otherwise.
-                runCatching { ensureAnalysed(current(), deps, id) }
-                    .onFailure {
-                        if (it is CancellationException) throw it
-                        TrackLog.w("BitChord", "harmonic track $id failed: ${it.message}", it, null)
-                    }
-                if (myGeneration != generation) return@launch
-                val usable = deps.analyzer.analysisFor(id).isUsable
-                TrackLog.d("BitChord", "harmonic measured $id usable=$usable", null)
-                // Real-time: every landing re-sorts and re-applies immediately,
-                // so the queue visibly jumps track by track while measuring.
-                // Store-hit tracks land in milliseconds, so the first jumps
-                // come almost at once.
-                current()?.let { live ->
-                    runCatching { sortAndApply(live, deps, scopeIds) }
-                        .onFailure { TrackLog.w("BitChord", "harmonic apply failed: ${it.message}", it, null) }
-                }
-                if (myGeneration != generation) return@launch
-                _progress.value = Progress(index + 1, scopeIds.size)
-            }
-            _progress.value = null
+            TrackLog.d("BitChord", "harmonic worker started", null)
+            drainLoop(deps, current, myGeneration)
         }
+    }
+
+    /**
+     * Rolling 20-ahead: every pass re-reads the live upcoming window,
+     * measures the first track in it with no usable analysis, re-sorts on
+     * every landing, and parks — leaving the count on screen — when the
+     * whole window reads usable. [topUp] relaunches on every queue change,
+     * so a finished track sliding out or a refill sliding in just becomes
+     * the next pass. The terminal count stays published until the sort
+     * stands down: the pill reads "20/20", not a bare icon.
+     */
+    private suspend fun drainLoop(deps: Deps, current: () -> Player?, myGeneration: Int) {
+        while (true) {
+            if (myGeneration != generation) return
+            val live = current() ?: return
+            extendScope(live)
+            publishProgress(live, deps)
+            val next = nextNeedingMeasure(live, deps) ?: run {
+                TrackLog.d("BitChord", "harmonic worker parked, window measured", null)
+                return
+            }
+            if (myGeneration != generation) return
+            // Guarded per track: one unmeasurable id must not take the
+            // others down with it, silently or otherwise.
+            runCatching { ensureAnalysed(current(), deps, next) }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    TrackLog.w("BitChord", "harmonic track $next failed: ${it.message}", it, null)
+                }
+            attempted += next
+            if (myGeneration != generation) return
+            val usable = deps.analyzer.analysisFor(next).isUsable
+            TrackLog.d("BitChord", "harmonic measured $next usable=$usable", null)
+            // Real-time: every landing re-sorts and re-applies immediately,
+            // so the queue visibly jumps track by track while measuring.
+            // Store-hit tracks land in milliseconds, so the first jumps
+            // come almost at once.
+            current()?.let { l ->
+                runCatching { sortAndApply(l, deps, scopeIds) }
+                    .onFailure { TrackLog.w("BitChord", "harmonic apply failed: ${it.message}", it, null) }
+            }
+            if (myGeneration != generation) return
+            publishProgress(current() ?: live, deps)
+        }
+    }
+
+    /** Live upcoming ids, oldest first. */
+    private fun upcomingIds(player: Player): List<String> {
+        val from = player.currentMediaItemIndex + 1
+        if (from >= player.mediaItemCount) return emptyList()
+        return List(player.mediaItemCount - from) { player.getMediaItemAt(from + it).mediaId }
+    }
+
+    /** Folds the live 20-ahead window into the measured scope (never shrinks). */
+    private fun extendScope(player: Player) {
+        val window = upcomingIds(player).take(MAX_SORT_AHEAD)
+        if (window.isEmpty()) return
+        scopeIds = (scopeIds + window).distinct()
+    }
+
+    /** First window track with no usable analysis that this activation hasn't attempted. */
+    private fun nextNeedingMeasure(player: Player, deps: Deps): String? =
+        upcomingIds(player).take(MAX_SORT_AHEAD).firstOrNull {
+            it !in attempted && !deps.analyzer.analysisFor(it).isUsable
+        }
+
+    /** Publishes usable-vs-window so the pill always reads a count, never a bare icon. */
+    private fun publishProgress(player: Player, deps: Deps) {
+        val window = upcomingIds(player).take(MAX_SORT_AHEAD)
+        if (window.isEmpty()) return
+        _progress.value = Progress(window.count { deps.analyzer.analysisFor(it).isUsable }, window.size)
     }
 
     /**
@@ -391,6 +467,7 @@ object HarmonicSort {
         }
         original = emptyList()
         scopeIds = emptyList()
+        attempted.clear()
     }
 
     private fun Player.indexOfId(id: String): Int? =
