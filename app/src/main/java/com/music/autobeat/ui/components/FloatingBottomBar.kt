@@ -231,7 +231,10 @@ fun FloatingBottomBar(
                         scaleY = 1f - lag * STRETCH * SQUASH
                     }
                     .clip(pillShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    .then(
+                        if (useGlass) Modifier.liquidGlass(shape = pillShape)
+                        else Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    ),
             )
         }
 

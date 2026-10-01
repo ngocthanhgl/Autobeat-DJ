@@ -2205,6 +2205,18 @@ class PlaybackService : MediaLibraryService() {
         // The analyzer's priority lane follows the queue, not the track: the
         // two ahead are what the next transitions will be planned from.
         updateAnalysisPriority(exoPlayer)
+        // The 20-ahead window slides on every advance even when the playlist
+        // itself did not change — history trim only removes past 25 played,
+        // so early in a session an advance fires no PLAYLIST_CHANGED and the
+        // parked sorter never sees the newcomers sliding into its window.
+        // Wake it here too; no-op unless sorting and parked.
+        if (HarmonicSort.isActive) {
+            HarmonicSort.topUp(
+                exoPlayer,
+                HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+                current = { player },
+            )
+        }
 
         // A crossfade handoff never fires [formatListener] for the entering
         // track — [CrossfadeController] starts its decoder during ARMING,

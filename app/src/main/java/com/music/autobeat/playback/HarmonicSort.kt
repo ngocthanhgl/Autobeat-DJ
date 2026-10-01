@@ -312,11 +312,18 @@ object HarmonicSort {
         return List(player.mediaItemCount - from) { player.getMediaItemAt(from + it).mediaId }
     }
 
-    /** Folds the live 20-ahead window into the measured scope (never shrinks). */
+    /**
+     * Folds the live 20-ahead window into the measured scope (never shrinks
+     * the window itself). Played ids are pruned: the scope only ever steers
+     * live tracks, and without pruning a long session accumulates every id it
+     * ever saw — including ones repeat-all rotated back to the end, which
+     * would then read as already-placed.
+     */
     private fun extendScope(player: Player) {
         val window = upcomingIds(player).take(MAX_SORT_AHEAD)
         if (window.isEmpty()) return
-        scopeIds = (scopeIds + window).distinct()
+        val live = List(player.mediaItemCount) { player.getMediaItemAt(it).mediaId }.toSet()
+        scopeIds = (scopeIds.filter { it in live } + window).distinct()
     }
 
     /** First window track with no usable analysis that this activation hasn't attempted. */

@@ -27,22 +27,13 @@ import dev.chrisbanes.haze.materials.HazeMaterials
  * The run the fade needs below the bar to get from full blur to none without
  * the eye finding where it got there.
  *
- * Shortened from 120, then from 88: the blur is meant to belong to the top of
- * the screen, and at 88 the strip came to 167dp on a 1080p phone — over a fifth
- * of the display held under a blur that was only ever there to carry a 52dp
- * bar. It reads as a hazy band the page scrolls through rather than as glass
- * behind the bar.
- *
- * Shortening it is safe in the direction that used to be the problem. The
- * gradient is eased across the whole strip rather than across this run alone,
- * so a shorter strip decays to nothing *sooner in absolute distance*: the first
- * heading, which sits a fixed distance down the screen, ends up with less blur
- * behind it than before rather than more. What it costs is intensity over the
- * bar's own glyphs, which is why this cannot keep going — the tail still has to
- * reach nothing before the layer ends, or the layer's end is the edge the whole
- * fade exists to hide.
+ * Deliberately tall: the fade is one uniform treatment from the status bar
+ * down into the artwork, not a short strip that ends mid-picture. A short
+ * strip ends where the eye is already looking and its end reads as a line —
+ * the black edge this exists to avoid. The gradient is eased across the whole
+ * height so it still arrives at nothing before the layer ends.
  */
-private val FADE_RUN = 32.dp
+private val FADE_RUN = 96.dp
 
 /**
  * How much blur the fade reaches at its outer edge — short of all of it.
@@ -58,11 +49,12 @@ private const val PEAK = 0.75f
 /**
  * How dark the readability scrim starts, at the very top of the strip.
  *
- * Modest on purpose: it is there to give white glyphs a floor on a pale sleeve,
- * not to grey out the artwork. Anything heavier and the bar stops being a fade
- * over a picture and starts being a header with a picture behind it.
+ * Light on purpose: the blur carries the glass, the scrim only gives white
+ * glyphs a floor on a pale sleeve. Anything heavier stacks a second visible
+ * tier over the blur — a sharp dark cap above a soft fade — which is exactly
+ * the two-layer look this replaced.
  */
-private const val SCRIM_PEAK = 0.42f
+private const val SCRIM_PEAK = 0.2f
 
 /** Enough stops that the ramp does not band across a near-flat colour. */
 private const val SCRIM_STOPS = 12
@@ -134,15 +126,13 @@ fun TopFadeBlur(
                 // the artwork: the exact artefact this was added to remove.
                 style = HazeMaterials.ultraThin(pageColor),
             ) {
-                // Sampled at a third, and upscaled back. This strip is
-                // 1080x501 on a 1080p phone and was the single most expensive
-                // thing drawn on a feed: a full-resolution progressive blur,
-                // re-run every frame of every scroll, measured at ~5ms of GPU
-                // time per frame against a 8.3ms budget at 120Hz. A blur is
-                // low-frequency by definition — a third of the pixels carries
-                // the same result once the ramp has been applied, and it is
-                // the same trade the liquid glass surfaces already make.
-                inputScale = HazeInputScale.Fixed(0.33f)
+                // Sampled at half resolution, and upscaled back. A blur is
+                // low-frequency by definition — half the pixels carries the
+                // same result once the ramp has been applied. Kept sharper
+                // than the old third-resolution sample on purpose: a soft,
+                // blocky blur under a crisp scrim reads as two separate tiers,
+                // and the eye finds the seam between them.
+                inputScale = HazeInputScale.Fixed(0.5f)
                 // This is intentionally the progressive Haze effect used by the
                 // original top treatment. The mask-based optimization changes
                 // the visual result on device and loses the soft blur shown in

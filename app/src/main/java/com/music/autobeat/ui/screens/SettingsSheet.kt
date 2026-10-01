@@ -125,6 +125,7 @@ import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import com.music.autobeat.ui.components.isGlassSupported
 import com.music.autobeat.ui.components.languageDisplayNameRes
+import com.music.autobeat.ui.components.lightweightLiquidGlass
 import com.music.autobeat.ui.components.MessageState
 import com.music.autobeat.ui.components.SearchField
 import com.music.autobeat.ui.components.thumbnailBorder
@@ -475,14 +476,10 @@ fun SettingsScreen(
                     ),
                     enabled = dolbyAtmosSupported,
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = dolbyAtmos && dolbyAtmosSupported,
                             onCheckedChange = AppSettings::setDolbyAtmos,
                             enabled = dolbyAtmosSupported,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setDolbyAtmos(!dolbyAtmos) },
@@ -537,13 +534,9 @@ fun SettingsScreen(
                     title = preferMusicOnlyTitle,
                     subtitle = stringResource(R.string.prefer_music_only_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = preferMusicOnly,
                             onCheckedChange = AppSettings::setPreferMusicOnly,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setPreferMusicOnly(!preferMusicOnly) },
@@ -576,7 +569,7 @@ fun SettingsScreen(
                     title = djModeTitle,
                     subtitle = stringResource(R.string.mixset_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = mixset,
                             onCheckedChange = { checked ->
                                 if (checked && outputPcmMode == OutputPcmMode.FLOAT_32) {
@@ -584,10 +577,6 @@ fun SettingsScreen(
                                 }
                                 AppSettings.setMixsetModeEnabled(checked)
                             },
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = {
@@ -605,13 +594,9 @@ fun SettingsScreen(
                     title = loudnessTitle,
                     subtitle = stringResource(R.string.loudness_normalization_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = loudnessNormalization,
                             onCheckedChange = AppSettings::setLoudnessNormalizationEnabled,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setLoudnessNormalizationEnabled(!loudnessNormalization) },
@@ -624,13 +609,9 @@ fun SettingsScreen(
                     title = skipSilenceTitle,
                     subtitle = stringResource(R.string.skip_silence_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = skipSilence,
                             onCheckedChange = AppSettings::setSkipSilence,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setSkipSilence(!skipSilence) },
@@ -643,13 +624,9 @@ fun SettingsScreen(
                     title = spatialAudioTitle,
                     subtitle = stringResource(R.string.spatial_audio_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = spatialAudio,
                             onCheckedChange = AppSettings::setSpatialAudio,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setSpatialAudio(!spatialAudio) },
@@ -688,13 +665,9 @@ fun SettingsScreen(
                     title = reduceAnimationTitle,
                     subtitle = stringResource(R.string.reduce_animation_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = reduceAnimation,
                             onCheckedChange = AppSettings::setReduceAnimation,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setReduceAnimation(!reduceAnimation) },
@@ -707,13 +680,9 @@ fun SettingsScreen(
                     title = reduceDynamicBlurTitle,
                     subtitle = stringResource(R.string.reduce_dynamic_blur_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = reduceDynamicBlur,
                             onCheckedChange = AppSettings::setReduceDynamicBlur,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setReduceDynamicBlur(!reduceDynamicBlur) },
@@ -733,14 +702,10 @@ fun SettingsScreen(
                     ),
                     enabled = liquidGlassSupported,
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = liquidGlass,
                             onCheckedChange = AppSettings::setLiquidGlass,
                             enabled = liquidGlassSupported,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setLiquidGlass(!liquidGlass) },
@@ -758,13 +723,9 @@ fun SettingsScreen(
                         title = fullScreenCoverArtTitle,
                         subtitle = stringResource(R.string.full_screen_cover_art_subtitle),
                         trailing = {
-                            Switch(
+                            GlassSwitch(
                                 checked = fullBleedArtwork,
                                 onCheckedChange = AppSettings::setFullBleedArtwork,
-                                colors = SwitchDefaults.colors(
-                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                    checkedBorderColor = MaterialTheme.colorScheme.primary,
-                                ),
                             )
                         },
                         onClick = { AppSettings.setFullBleedArtwork(!fullBleedArtwork) },
@@ -778,13 +739,9 @@ fun SettingsScreen(
                     title = legacyMeshGradientTitle,
                     subtitle = stringResource(R.string.legacy_mesh_gradient_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = legacyMeshGradient,
                             onCheckedChange = AppSettings::setLegacyMeshGradient,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setLegacyMeshGradient(!legacyMeshGradient) },
@@ -800,13 +757,9 @@ fun SettingsScreen(
                     title = animatedCoverArtTitle,
                     subtitle = stringResource(R.string.animated_cover_art_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = animatedCanvas,
                             onCheckedChange = AppSettings::setAnimatedCanvas,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setAnimatedCanvas(!animatedCanvas) },
@@ -856,13 +809,9 @@ fun SettingsScreen(
                     title = syncedLyricsTitle,
                     subtitle = stringResource(R.string.synced_lyrics_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = syncedLyrics,
                             onCheckedChange = AppSettings::setSyncedLyrics,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setSyncedLyrics(!syncedLyrics) },
@@ -879,13 +828,9 @@ fun SettingsScreen(
                         title = lyricsBlurTitle,
                         subtitle = stringResource(R.string.blur_unfocused_lyrics_subtitle),
                         trailing = {
-                            Switch(
+                            GlassSwitch(
                                 checked = lyricsBlur,
                                 onCheckedChange = AppSettings::setLyricsBlur,
-                                colors = SwitchDefaults.colors(
-                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                    checkedBorderColor = MaterialTheme.colorScheme.primary,
-                                ),
                             )
                         },
                         onClick = { AppSettings.setLyricsBlur(!lyricsBlur) },
@@ -955,13 +900,9 @@ fun SettingsScreen(
                     title = filterNonMusicAudioTitle,
                     subtitle = stringResource(R.string.filter_non_music_audio_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = filterNonMusicAudio,
                             onCheckedChange = AppSettings::setFilterNonMusicAudio,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setFilterNonMusicAudio(!filterNonMusicAudio) },
@@ -1041,13 +982,9 @@ fun SettingsScreen(
                         stringResource(R.string.replay_genres_disabled_subtitle)
                     },
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = replayGenres,
                             onCheckedChange = AppSettings::setReplayGenres,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setReplayGenres(!replayGenres) },
@@ -1087,13 +1024,9 @@ fun SettingsScreen(
                         stringResource(R.string.swipe_adds_to_queue)
                     },
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = swipeToPlayNext,
                             onCheckedChange = AppSettings::setSwipeToPlayNext,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setSwipeToPlayNext(!swipeToPlayNext) },
@@ -1106,13 +1039,9 @@ fun SettingsScreen(
                     title = dontRepeatSongsTitle,
                     subtitle = stringResource(R.string.dont_repeat_songs_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = dontRepeatSuggestions,
                             onCheckedChange = AppSettings::setDontRepeatSuggestions,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setDontRepeatSuggestions(!dontRepeatSuggestions) },
@@ -1125,13 +1054,9 @@ fun SettingsScreen(
                     title = stopMusicOnCloseTitle,
                     subtitle = stringResource(R.string.stop_music_on_close_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = stopOnTaskRemoved,
                             onCheckedChange = AppSettings::setStopOnTaskRemoved,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setStopOnTaskRemoved(!stopOnTaskRemoved) },
@@ -1144,13 +1069,9 @@ fun SettingsScreen(
                     title = hideVolumeBarTitle,
                     subtitle = stringResource(R.string.hide_volume_bar_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = hideVolumeBar,
                             onCheckedChange = AppSettings::setHideVolumeBar,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setHideVolumeBar(!hideVolumeBar) },
@@ -1180,13 +1101,9 @@ fun SettingsScreen(
                     title = showNerdStatsTitle,
                     subtitle = stringResource(R.string.show_nerd_stats_subtitle),
                     trailing = {
-                        Switch(
+                        GlassSwitch(
                             checked = nerdStats,
                             onCheckedChange = AppSettings::setShowNerdStats,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
                         )
                     },
                     onClick = { AppSettings.setShowNerdStats(!nerdStats) },
@@ -1216,12 +1133,8 @@ fun SettingsScreen(
                     append("GitHub")
                 }
                 append("  ")
-                withLink(LinkAnnotation.Url("https://github.com/kushagrasinghx", linkStyles)) {
+                withLink(LinkAnnotation.Url("https://github.com/ngocthanhgl", linkStyles)) {
                     append("Developer")
-                }
-                append("  ")
-                withLink(LinkAnnotation.Url("https://Autobeat.kushagrasingh.in/", linkStyles)) {
-                    append("Website")
                 }
                 append("\n~YouTube Music Backend")
             },
@@ -2124,6 +2037,40 @@ internal fun SettingsRow(
 }
 
 /**
+ * Every on/off toggle on this page through one door: a Material3 Switch with
+ * transparent tracks over a liquid-glass pill, so the glass carries the
+ * control instead of a flat fill. Off glass falls back to the theme's surface
+ * variant, on glass to the primary.
+ */
+@Composable
+internal fun GlassSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Box(
+        modifier = modifier.lightweightLiquidGlass(
+            shape = CircleShape,
+            fallbackColor = if (checked) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = Color.Transparent,
+                uncheckedTrackColor = Color.Transparent,
+                checkedBorderColor = Color.Transparent,
+                uncheckedBorderColor = Color.Transparent,
+            ),
+        )
+    }
+}
+
+/**
  * A toggle that reads as part of the option above it rather than a setting
  * of its own: no icon, no divider, and pulled up close against its parent
  * instead of getting the same breathing room a full [SettingsRow] gets.
@@ -2166,13 +2113,9 @@ internal fun SettingsSubRow(
                 )
             }
         }
-        Switch(
+        GlassSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                checkedBorderColor = MaterialTheme.colorScheme.primary,
-            ),
         )
     }
 }

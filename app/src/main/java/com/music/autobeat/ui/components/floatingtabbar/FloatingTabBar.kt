@@ -74,6 +74,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -110,6 +111,7 @@ import com.music.autobeat.data.settings.AppSettings
 import com.music.autobeat.ui.components.GlassSpring
 import com.music.autobeat.ui.components.SQUASH
 import com.music.autobeat.ui.components.STRETCH
+import com.music.autobeat.ui.components.liquidGlass
 import com.music.autobeat.ui.haptics.Haptic
 import com.music.autobeat.ui.haptics.rememberHaptics
 import kotlin.math.abs
@@ -748,6 +750,10 @@ private fun SharedTransitionScope.ExpandedTabs(
     val haptics = rememberHaptics()
 
     var dragOffset by remember { mutableFloatStateOf(0f) }
+    // The standalone tab has no slot in this row: when it is selected the
+    // index reads -1, and aiming the pill at slot 0 would light Home while
+    // Search is the selected one. Hold the last in-row slot instead.
+    var lastIndicatorIndex by remember { mutableIntStateOf(selectedTabIndex.coerceAtLeast(0)) }
     var rowSize by remember { mutableStateOf(IntSize.Zero) }
     var lastHapticTab by remember { mutableIntStateOf(selectedTabIndex) }
     val density = LocalDensity.current
@@ -763,8 +769,8 @@ private fun SharedTransitionScope.ExpandedTabs(
     } else {
         0f
     }
-    val indicatorTargetPx = if (selectedTabIndex >= 0 && tabStepPx > 0f) {
-        selectedTabIndex * tabStepPx + dragOffset
+    val indicatorTargetPx = if (tabStepPx > 0f) {
+        lastIndicatorIndex * tabStepPx + dragOffset
     } else {
         0f
     }
@@ -782,6 +788,7 @@ private fun SharedTransitionScope.ExpandedTabs(
     LaunchedEffect(selectedTabKey) {
         dragOffset = 0f
         lastHapticTab = selectedTabIndex
+        if (selectedTabIndex >= 0) lastIndicatorIndex = selectedTabIndex
     }
 
     Box(
@@ -804,7 +811,7 @@ private fun SharedTransitionScope.ExpandedTabs(
             .padding(sizes.tabBarContentPadding)
             .animateContentSize()
     ) {
-        if (selectedTabIndex >= 0 && tabWidthPx > 0f) {
+        if (tabWidthPx > 0f) {
             Box(
                 modifier = Modifier
                     .width(with(density) { tabWidthPx.toDp() })
@@ -815,7 +822,10 @@ private fun SharedTransitionScope.ExpandedTabs(
                         scaleY = 1f - lag * STRETCH * SQUASH
                     }
                     .clip(shapes.tabShape)
-                    .background(colors.indicatorColor, shapes.tabShape)
+                    .then(
+                        (shapes.tabShape as? CornerBasedShape)?.let { Modifier.liquidGlass(it) }
+                            ?: Modifier.background(colors.indicatorColor, shapes.tabShape),
+                    ),
             )
         }
 
@@ -1086,17 +1096,17 @@ private class FloatingTabBarScopeImpl : FloatingTabBarScope {
     private var inlineTab: FloatingTabBarTab? = null
 
     fun getInlineTab(selectedTabKey: Any?): FloatingTabBarTab? {
-        return if (selectedTabKey != standaloneTab?.key) {
-            val selectedTab = tabs.find { it.key == selectedTabKey }
-            if (selectedTab != null) {
-                inlineTab = selectedTab
-                selectedTab
-            } else {
-                inlineTab ?: tabs.firstOrNull()
-            }
-        } else {
-            inlineTab ?: tabs.firstOrNull()
+        // The standalone tab renders in its own slot with its own selected
+        // state: handing the collapsed row the previously selected in-scope
+        // tab here would show two "current" tabs at once — the stale icon on
+        // the left, the lit standalone on the right.
+        if (selectedTabKey == standaloneTab?.key) return null
+        val selectedTab = tabs.find { it.key == selectedTabKey }
+        if (selectedTab != null) {
+            inlineTab = selectedTab
+            return selectedTab
         }
+        return inlineTab ?: tabs.firstOrNull()
     }
 
     override fun tab(
