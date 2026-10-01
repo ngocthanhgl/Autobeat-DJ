@@ -69,11 +69,11 @@ One of the main goals of Autobeat is **fast AI analysis without keeping the devi
 
 | | Bitchord | Autobeat |
 |---|---:|---:|
-| Track analysis | Up to ~1 minute | **~5–6 seconds** |
+| Track analysis | Up to ~1 minute | **~5–10 seconds** |
 | Primary focus | Smart crossfade | **DJ analysis** |
-| AI-powered | — | **AI-powered** |
+| Analysis | AI-powered | **AI-powered** |
 
-> **~5–6 seconds on flagship hardware**
+> **~5–10 seconds on flagship hardware**
 
 Actual performance depends on the device, track length, audio format, and analysis workload.
 
