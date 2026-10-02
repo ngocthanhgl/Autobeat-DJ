@@ -508,6 +508,21 @@ class CrossfadeController(
     // begin()); reverb close needs no delay param (wet only).
     private var pendingReverbCloseFromWet = 0f
     private var pendingReverbCloseStartMs = -1L
+    // Frozen-duck fix: an early finish (early cut, A ended, span clamp,
+    // toggled off) lands finish() at progress < 1 with the incoming EQ
+    // still tapered — and finish() deliberately leaves DSP parked rather
+    // than snapping it at full volume. Armed in finish(), stepped in
+    // tick(), flushed in begin(): the session deck glides to unity over
+    // EQ_OPEN_MS instead of playing tapered until the next track.
+    private var pendingEqOpenFromLow = 1f
+    private var pendingEqOpenFromMid = 1f
+    private var pendingEqOpenFromHigh = 1f
+    private var pendingEqOpenStartMs = -1L
+    // Last incoming-deck EQ aims, recorded per rideEq tick so the glide
+    // above starts from the frozen values rather than guessing them.
+    private var lastInLow = 1f
+    private var lastInMid = 1f
+    private var lastInHigh = 1f
     // DJ brake (F2): last committed brake rate, for coalesced per-tick ramps.
     private var lastBrakeRate: Float = 1f
     // Booth backspin: the spin-back dive occupies the energy-scaled tail of
@@ -1048,6 +1063,22 @@ class CrossfadeController(
                 pendingReverbCloseStartMs = -1L
             } else {
                 reverbFilters.outgoing(pendingReverbCloseFromWet * (1f - t), false)
+            }
+        }
+        // Frozen-duck fix: stepped unity glide armed in finish() — same
+        // shape as the echo/reverb closes above, through the existing
+        // incoming() target (the session deck after the handoff).
+        if (pendingEqOpenStartMs >= 0L) {
+            val t = (SystemClock.elapsedRealtime() - pendingEqOpenStartMs).toFloat() / EQ_OPEN_MS
+            if (t >= 1f) {
+                eqFilters.incoming(1f, 1f, 1f)
+                pendingEqOpenStartMs = -1L
+            } else {
+                eqFilters.incoming(
+                    pendingEqOpenFromLow + (1f - pendingEqOpenFromLow) * t,
+                    pendingEqOpenFromMid + (1f - pendingEqOpenFromMid) * t,
+                    pendingEqOpenFromHigh + (1f - pendingEqOpenFromHigh) * t,
+                )
             }
         }
 
@@ -2035,6 +2066,13 @@ class CrossfadeController(
             reverbFilters.outgoing(0f, false)
             pendingReverbCloseStartMs = -1L
         }
+        // Flush a stepped EQ open in flight too: the new fade's rideEq aims
+        // the deck from its first tick, so a stale glide must not fight it.
+        // Parked shut at unity, which is also where the glide was headed.
+        if (pendingEqOpenStartMs >= 0L) {
+            eqFilters.incoming(1f, 1f, 1f)
+            pendingEqOpenStartMs = -1L
+        }
         // Missed-window fix F4: an accepted arm ends the storm.
         consecutiveBailCount = 0
         bailCooldownUntilMs = 0L
@@ -2920,6 +2958,21 @@ class CrossfadeController(
             render.echoAmount > 0.0 && !throwBlend
         val echoTailAmount = render.echoAmount
         val echoTailDelaySec = render.echoBeatSeconds
+        // Frozen-duck fix: the handoff is done but the incoming EQ may be
+        // tapered mid-gesture (early cut, A ended, span clamp, toggled off)
+        // while finish() below leaves DSP parked. Completed fades arrive at
+        // unity by construction (every incoming table ends there), so only
+        // an early finish arms the stepped glide — and only when there is
+        // actually something to open, so a unity freeze costs no DSP writes.
+        // Captured before Render() is parked below, like the rest.
+        if (handedOff && render.eqEnabled && lastProgress < 0.98f &&
+            (lastInLow < 0.999f || lastInMid < 0.999f || lastInHigh < 0.999f)
+        ) {
+            pendingEqOpenFromLow = lastInLow
+            pendingEqOpenFromMid = lastInMid
+            pendingEqOpenFromHigh = lastInHigh
+            pendingEqOpenStartMs = SystemClock.elapsedRealtime()
+        }
         render = Render()
 
         // Energy-dip fix (Issue 2): the DJ fade ran with silence-skipping
@@ -3248,6 +3301,9 @@ class CrossfadeController(
         // followed by a catch-up swell — the up-down the booth never does.
         // Long blend warmth: tame the shimmer mid-blend so body, not air, dominates.
         val highIn = if (longBed) into.high * (0.70f + 0.30f * entryRamp) else into.high
+        lastInLow = lowIn
+        lastInMid = into.mid * entryRamp
+        lastInHigh = highIn
         eqFilters.incoming(lowIn, into.mid * entryRamp, highIn)
     }
 
@@ -3997,6 +4053,13 @@ class CrossfadeController(
          * bail/mute ramps, inaudible as a move.
          */
         const val THROW_CLOSE_MS = 200L
+
+        /**
+         * A frozen incoming EQ glides back to unity over this long, stepped
+         * in tick() through the existing incoming() target — same wall-clock
+         * order as the throw/reverb closes, inaudible as a move.
+         */
+        const val EQ_OPEN_MS = 150L
 
         /**
          * The INSTANT flip settles over this long instead of stepping: the
