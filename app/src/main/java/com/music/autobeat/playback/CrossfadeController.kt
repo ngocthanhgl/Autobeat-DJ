@@ -38,6 +38,7 @@ import com.music.autobeat.playback.smart.phrase16Grid
 import com.music.autobeat.playback.smart.orZero
 import com.music.autobeat.playback.smart.VOCAL_ACTIVE_THRESHOLD
 import com.music.autobeat.playback.smart.MIN_GUARANTEED_BLEND_SECONDS
+import com.music.autobeat.playback.smart.MIN_BEATMATCH_CONFIDENCE
 import kotlin.math.max
 import kotlin.math.min
 import com.music.autobeat.playback.smart.plainDissolvePlan
@@ -76,6 +77,21 @@ fun tempoGlideFactor(progress: Float, stretch: Double): Double {
     val t = ((progress - start) / (end - start).coerceAtLeast(0.05f)).coerceIn(0f, 1f)
     val s = t * t * (3f - 2f * t)
     return 1.0 - s
+}
+
+/**
+ * Tempo distrust gate: true only when the analysis grid is solid enough to
+ * stretch against. Same 0.55 bar the tier gate uses for BEATMATCHED, plus
+ * two structural tells — a head-only pass (provisionalHead) never saw the
+ * full track, and an empty downbeat list means no phase anchor was found.
+ * Either side distrusted refuses the whole pair's stretch (the ratio needs
+ * both BPMs true).
+ */
+private fun tempoGridTrusted(a: TrackAnalysis): Boolean {
+    if (a.beatConfidence < MIN_BEATMATCH_CONFIDENCE) return false
+    if (a.provisionalHead) return false
+    if (a.downbeats.isEmpty()) return false
+    return true
 }
 
 /**
@@ -521,6 +537,19 @@ class CrossfadeController(
     private var pendingEqOpenFromMid = 1f
     private var pendingEqOpenFromHigh = 1f
     private var pendingEqOpenStartMs = -1L
+    // Tempo no-snap: finish() never resets the rate at full volume anymore.
+    // Instead it arms this post-handoff glide — the session deck walks from
+    // the frozen live rate/pitch home over TEMPO_HOME_MS, stepped in tick()
+    // through setPlaybackParameters with the same 0.05% coalescing the fade
+    // glide uses. Armed in finish(), stepped in tick(), flushed in begin().
+    // The owning deck is captured because the next handoff swaps active():
+    // a glide whose deck is no longer the session is disarmed, never
+    // re-aimed — the new arm sets that deck's rate fresh while silent.
+    private var pendingTempoHomePlayer: ExoPlayer? = null
+    private var pendingTempoHomeFromSpeed = 1f
+    private var pendingTempoHomeFromPitch = 1f
+    private var pendingTempoHomeStartMs = -1L
+    private var pendingTempoHomeSpanMs = TEMPO_HOME_MS
     // Last incoming-deck EQ aims, recorded per rideEq tick so the glide
     // above starts from the frozen values rather than guessing them.
     private var lastInLow = 1f
@@ -1084,6 +1113,42 @@ class CrossfadeController(
                 )
             }
         }
+        // Tempo no-snap: post-handoff glide armed in finish() — same
+        // shape as the EQ open above, through setPlaybackParameters with
+        // the fade glide's 0.05% coalescing (a pipeline re-prepare per
+        // inaudible delta is the stutter the coalescer exists to avoid).
+        // Disarmed (never re-aimed) once the deck is no longer the session:
+        // after the next handoff that deck retires, and the new arm sets
+        // its rate fresh while silent.
+        if (pendingTempoHomeStartMs >= 0L) {
+            val deck = pendingTempoHomePlayer
+            if (deck == null || deck !== active()) {
+                pendingTempoHomeStartMs = -1L
+                pendingTempoHomePlayer = null
+            } else {
+                val t = (SystemClock.elapsedRealtime() - pendingTempoHomeStartMs)
+                    .toFloat() / pendingTempoHomeSpanMs.coerceAtLeast(1L)
+                val wantSpeed = AppSettings.playbackSpeed.value
+                if (t >= 1f) {
+                    deck.setPlaybackParameters(PlaybackParameters(wantSpeed, 1f))
+                    pendingTempoHomeStartMs = -1L
+                    pendingTempoHomePlayer = null
+                } else {
+                    val s = t * t * (3f - 2f * t)
+                    val newRate = pendingTempoHomeFromSpeed +
+                        (wantSpeed - pendingTempoHomeFromSpeed) * s
+                    val newPitch = pendingTempoHomeFromPitch +
+                        (1f - pendingTempoHomeFromPitch) * s
+                    val last = lastCommittedRate
+                    if (last == null ||
+                        abs(newRate - last) / last.coerceAtLeast(1e-6f) >= 0.0005f
+                    ) {
+                        deck.setPlaybackParameters(PlaybackParameters(newRate, newPitch))
+                        lastCommittedRate = newRate
+                    }
+                }
+            }
+        }
 
         // Every tick, not only when a transition can be planned. This used to
         // live inside [considerSmartTransition], which needs an idle phase, a
@@ -1298,6 +1363,28 @@ class CrossfadeController(
             if (note != null) {
                 TrackLog.d(TAG, "human ${currentItem.mediaId}→${nextItem.mediaId}: $note")
             }
+        }
+        // Tempo distrust gate: a wrong-but-plausible BPM (inside the tier
+        // window, confidently voiced) is exactly what turns a routine early
+        // finish into a full-volume tempo snap — the glide freezes mid-walk
+        // and finish() "corrects" a number that was never true. When either
+        // side's grid is a guess (low confidence, head-only pass, no
+        // downbeats), the stretch is refused at the arm: the deck plays at
+        // 1.0, off-grid through the overlap but with nothing to snap home.
+        // Pitch is untouched — the key ladder carries its own trustedKey
+        // confidence bar, independent of the beat grid.
+        if (mixset && plan.incomingPlaybackRate != 1.0 &&
+            (!tempoGridTrusted(currentAnalysis) || !tempoGridTrusted(nextAnalysis))
+        ) {
+            TrackLog.d(
+                TAG,
+                "tempo distrust ${currentItem.mediaId}->${nextItem.mediaId}: " +
+                    "conf=${currentAnalysis.beatConfidence}/${nextAnalysis.beatConfidence} " +
+                    "head=${currentAnalysis.provisionalHead}/${nextAnalysis.provisionalHead} " +
+                    "downbeats=${currentAnalysis.downbeats.size}/${nextAnalysis.downbeats.size} " +
+                    "rate ${plan.incomingPlaybackRate}->1.0",
+            )
+            plan = plan.copy(incomingPlaybackRate = 1.0)
         }
         // One line per distinct verdict rather than one per 250ms tick, so the
         // log says what the planner decided for this pair without burying it.
@@ -2075,6 +2162,16 @@ class CrossfadeController(
         if (pendingEqOpenStartMs >= 0L) {
             eqFilters.incoming(1f, 1f, 1f)
             pendingEqOpenStartMs = -1L
+        }
+        // Flush a post-handoff tempo glide in flight too: disarm WITHOUT
+        // completing — completing would snap the still-audible session deck
+        // (now this fade's outgoing) to home at full volume, the exact snap
+        // this glide exists to avoid. The deck keeps its mid-walk rate while
+        // it fades out, and its next incoming arm sets the rate fresh while
+        // silent, so nothing ever needs the snap.
+        if (pendingTempoHomeStartMs >= 0L) {
+            pendingTempoHomeStartMs = -1L
+            pendingTempoHomePlayer = null
         }
         // Missed-window fix F4: an accepted arm ends the storm.
         consecutiveBailCount = 0
@@ -3016,25 +3113,33 @@ class CrossfadeController(
                 val speedOff = abs(live.speed - wantSpeed) / wantSpeed.coerceAtLeast(1e-6f)
                 val pitchOff = abs(live.pitch - 1f)
                 val rateActuallyOff = speedOff >= 0.003f || pitchOff >= 0.003f
-                // Glide lands at 0.9 now, so a completed blend has no
-                // residual by construction — but an interrupted fade can
-                // strand a sub-1% drift. Snapping that at full volume is
-                // worse than leaving it: sub-1% is inaudible as a tempo
-                // error and the deck retires at the next handoff anyway.
-                // Only a big residual (>= 1%) earns an early snap.
-                val residualBig = speedOff >= 0.01f || pitchOff >= 0.01f
                 TrackLog.d(
                     TAG,
                     "finish handedOff lastProgress=$lastProgress live=${live.speed}x${live.pitch} " +
                         "want=$wantSpeed rateApplied=$rateApplied deckRateReset=$deckRateReset " +
                         "actuallyOff=$rateActuallyOff",
                 )
-                // Full-plan P2: rateActuallyOff alone authorizes the reset even
-                // when early — the exact compare proves the deck is off-home,
-                // and leaving a shifted deck for the whole next track is worse
-                // than a guarded reset. deckRateReset still prevents doubles.
-                if (rateApplied && !deckRateReset &&
-                    (lastProgress >= 0.98f || residualBig) &&
+                // Tempo no-snap (DJ-only): the old code committed
+                // setPlaybackParameters here at full volume, so every routine
+                // early finish on a wrong-BPM pair stepped tempo+pitch audibly
+                // — the glide had frozen mid-walk on a number that was never
+                // true. Now any residual arms the post-handoff glide instead:
+                // the deck walks home over ~150 ms per 1% of strand, stepped
+                // in tick(), and nothing commits at this tick. Stock keeps
+                // origin's immediate reset verbatim (upstream behavior).
+                if (wasDj) {
+                    if (rateApplied && !deckRateReset && rateActuallyOff) {
+                        val strand = max(speedOff, pitchOff).toDouble()
+                        pendingTempoHomePlayer = it
+                        pendingTempoHomeFromSpeed = live.speed
+                        pendingTempoHomeFromPitch = live.pitch
+                        pendingTempoHomeStartMs = SystemClock.elapsedRealtime()
+                        pendingTempoHomeSpanMs = (TEMPO_HOME_MS * (strand / 0.01)).roundToLong()
+                            .coerceIn(250L, 1200L)
+                        deckRateReset = true
+                    }
+                } else if (rateApplied && !deckRateReset &&
+                    (lastProgress >= 0.98f || speedOff >= 0.01f || pitchOff >= 0.01f) &&
                     (tempoGlideFactor(lastProgress, incomingPlaybackRate) > 0.02 || rateActuallyOff)
                 ) {
                     it.setPlaybackParameters(PlaybackParameters(AppSettings.playbackSpeed.value, 1f))
@@ -4092,6 +4197,14 @@ class CrossfadeController(
          * order as the throw/reverb closes, inaudible as a move.
          */
         const val EQ_OPEN_MS = 150L
+
+        /**
+         * A stranded tempo residual glides home over this long after the
+         * handoff, stepped in tick() — the no-snap replacement for finish()'s
+         * old full-volume reset. Scaled per-arm by residual size (see
+         * finish()); this is the base for a ~1% strand.
+         */
+        const val TEMPO_HOME_MS = 500L
 
         /**
          * The INSTANT flip settles over this long instead of stepping: the
