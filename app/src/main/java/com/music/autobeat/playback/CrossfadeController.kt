@@ -1386,6 +1386,50 @@ class CrossfadeController(
             )
             plan = plan.copy(incomingPlaybackRate = 1.0)
         }
+        // Vibe reaches the transition, not just the order: the vibe scales
+        // the overlap length and the wet amounts, so PEAK plays long big
+        // beds and LATE_NIGHT plays short intimate ones. The end stays
+        // anchored (transitionEnd untouched — the anchor is the outro/drop
+        // point); only the run-up stretches. Fraction-based fields (cue,
+        // swap, emphasis offsets) scale or ride along. Skipped for cuts and
+        // sub-4 s blends — stretching those rewrites the style, not the arc.
+        if (mixset && plan.shouldStart && !plan.blocked) {
+            val vibe = AppSettings.harmonicVibe.value
+            val overlapScale = when (vibe) {
+                HarmonicSort.Vibe.PEAK -> 1.25
+                HarmonicSort.Vibe.ARC -> 1.10
+                HarmonicSort.Vibe.WARM_UP -> 1.0
+                HarmonicSort.Vibe.COOL_DOWN -> 0.90
+                HarmonicSort.Vibe.LATE_NIGHT -> 0.75
+            }
+            val wetScale = when (vibe) {
+                HarmonicSort.Vibe.PEAK -> 1.3
+                HarmonicSort.Vibe.ARC -> 1.1
+                HarmonicSort.Vibe.WARM_UP -> 0.9
+                HarmonicSort.Vibe.COOL_DOWN -> 0.9
+                HarmonicSort.Vibe.LATE_NIGHT -> 0.6
+            }
+            val oldDur = plan.transitionEnd - plan.transitionStart
+            if (oldDur >= 4.0 && (overlapScale != 1.0 || wetScale != 1.0)) {
+                val newDur = (oldDur * overlapScale).coerceIn(4.0, 40.0)
+                val durRatio = newDur / oldDur
+                TrackLog.d(
+                    TAG,
+                    "vibe ${currentItem.mediaId}->${nextItem.mediaId}: ${vibe.name} " +
+                        "overlap ${"%.1f".format(Locale.ROOT, oldDur)}s->" +
+                        "${"%.1f".format(Locale.ROOT, newDur)}s wet x$wetScale",
+                )
+                plan = plan.copy(
+                    transitionStart = plan.transitionEnd - newDur,
+                    fadeSeconds = newDur,
+                    overlapSeconds = newDur,
+                    echoAmount = (plan.echoAmount * wetScale).coerceIn(0.0, 1.0),
+                    reverbAmount = (plan.reverbAmount * wetScale).coerceIn(0.0, 0.5),
+                    halfTimeEmphasis = plan.halfTimeEmphasis.map { it * durRatio },
+                    policyReasons = plan.policyReasons + "vibe-${vibe.name.lowercase()}x$overlapScale",
+                )
+            }
+        }
         // One line per distinct verdict rather than one per 250ms tick, so the
         // log says what the planner decided for this pair without burying it.
         val verdict = "${plan.reason}|${plan.transitionStyle}|fade=${plan.fadeMs}" +

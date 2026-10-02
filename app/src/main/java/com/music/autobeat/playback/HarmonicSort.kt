@@ -110,14 +110,20 @@ object HarmonicSort {
         val clamped = t.coerceIn(0.0, 1.0)
         return when (vibe) {
             Vibe.WARM_UP -> 0.25 + 0.65 * clamped
-            Vibe.PEAK -> 0.88 + 0.06 * kotlin.math.sin(clamped * Math.PI)
+            // Peak breathes: 0.80 at the edges, 0.98 at the apex. The old
+            // flat 0.88±0.06 line produced near-identical orders unless the
+            // scope was bimodal — a peak with no breath is a wall.
+            Vibe.PEAK -> 0.80 + 0.18 * kotlin.math.sin(clamped * Math.PI)
             Vibe.ARC -> if (clamped < 0.65) {
                 0.30 + 0.70 * (clamped / 0.65)
             } else {
                 1.0 - 0.70 * ((clamped - 0.65) / 0.35)
             }
             Vibe.COOL_DOWN -> 0.75 - 0.50 * clamped
-            Vibe.LATE_NIGHT -> 0.30 + 0.05 * kotlin.math.sin(clamped * 2 * Math.PI)
+            // Late night descends audibly (0.38 → 0.24) with a small breathing
+            // wave, instead of hovering flat at 0.30 — the old line could not
+            // steer at all.
+            Vibe.LATE_NIGHT -> 0.38 - 0.14 * clamped + 0.04 * kotlin.math.sin(clamped * 2 * Math.PI)
         }.coerceIn(0.0, 1.0)
     }
 
@@ -458,6 +464,21 @@ object HarmonicSort {
     }
 
     /**
+     * Absolute energy anchor from the master descriptors: a crushed loud
+     * master reads hotter than a quiet dynamic one even when their P85 curve
+     * shapes match. Scope-relative drop energy alone double-relativizes (per
+     * track P85, then per scope min-max) and destroys the absolute meaning of
+     * the 0..1 vibe targets. Null when unmeasured (-70 LUFS sentinel).
+     */
+    private fun absoluteEnergy(analysis: TrackAnalysis): Double? {
+        if (analysis.loudnessLufs <= -69.0) return null
+        val loud = ((analysis.loudnessLufs + 30.0) / 25.0).coerceIn(0.0, 1.0)
+        val dyn = if (analysis.dynamicRangeDb <= 0.0) 0.5
+            else 1.0 - (analysis.dynamicRangeDb / 20.0).coerceIn(0.0, 1.0)
+        return (0.6 * loud + 0.4 * dyn).coerceIn(0.0, 1.0)
+    }
+
+    /**
      * Share of the track under voice: mean of the vocal-activity mask. Null
      * when the analyzer measured no mask, which reads as no opinion.
      */
@@ -545,9 +566,15 @@ object HarmonicSort {
         val finite = rawEnergies.values.filterNotNull().filter { it.isFinite() }
         val eMin = finite.minOrNull() ?: 0.0
         val eMax = finite.maxOrNull() ?: 0.0
-        val energies = rawEnergies.mapValues { (_, raw) ->
-            if (raw == null || !raw.isFinite() || eMax <= eMin) 0.5
-            else ((raw - eMin) / (eMax - eMin)).coerceIn(0.0, 1.0)
+        // Absolute anchor: 70% scope-relative shape, 30% master truth, so a
+        // loud crushed track still reads hotter than a quiet dynamic one in
+        // the same scope. Unmeasured masters fall back to relative only.
+        val absolute = analyses.mapValues { (_, analysis) -> absoluteEnergy(analysis) }
+        val energies = rawEnergies.mapValues { (id, raw) ->
+            val rel = if (raw == null || !raw.isFinite() || eMax <= eMin) 0.5
+                else ((raw - eMin) / (eMax - eMin)).coerceIn(0.0, 1.0)
+            val abs = absolute[id]
+            if (abs == null) rel else (0.7 * rel + 0.3 * abs).coerceIn(0.0, 1.0)
         }
         // Tempo trajectory: the set drifts from the anchor toward the scope
         // median, so a smooth climb wins and a sawtooth pays per octave.
