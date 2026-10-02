@@ -1397,6 +1397,32 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             return WholeTrack(null)
         }
 
+        // Pass 0 (budget): refuse the whole-track decode before paying for
+        // it. The duration gate in [request] only sees the queue metadata,
+        // which routinely arrives after playback starts — a track that reads
+        // short-or-unknown there resolves its real (long) duration here and
+        // would otherwise decode hundreds of megabytes to find out. The
+        // estimate uses the container's own rate, not a guess, and costs one
+        // extractor open, not a decode. Over budget the track is recorded
+        // empty straight away: the same plain-crossfade fallback the OOM used
+        // to arrive at, minus the freeze and the burnt strikes.
+        val containerRate = openSource()?.use(AudioDecoder::containerSampleRate)
+        val estimatedBytes = if (containerRate != null && containerRate > 0) {
+            effectiveDuration * containerRate * Float.SIZE_BYTES
+        } else {
+            null
+        }
+        if (estimatedBytes != null && estimatedBytes > MAX_STRUCTURE_BYTES) {
+            triedRenditions.add(copy.key)
+            TrackLog.w(
+                TAG,
+                "Skipping structure of $trackId: ~${(estimatedBytes / 1048576).toLong()} MB decode " +
+                    "(${"%.0f".format(Locale.ROOT, effectiveDuration)}s @ " +
+                    "${"%.0f".format(Locale.ROOT, containerRate)} Hz) exceeds budget",
+            )
+            return WholeTrack(empty(trackId, effectiveDuration))
+        }
+
         // Pass 1 (Phase 1, DSP-only): the analyzer needs the whole track — the energy curve,
         // phrase structure and mix-out anchor all read the tail, not just a window of it — at its
         // own low sample rate, so this is a much smaller decode than a full-rate pass would be.
@@ -2024,6 +2050,19 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
          * as ready-but-empty at the [request] gate, so it is not retried.
          */
         const val MAX_ANALYSIS_DURATION_SECONDS = 600.0
+
+        /**
+         * The largest whole-track mono float decode Pass 1 may attempt.
+         *
+         * The decode costs duration × container rate × 4 bytes in one
+         * contiguous buffer — 130 MB for an 11-minute file at 48 kHz — and the
+         * heap holding it beside the resampled copy and the Pass-2 models is
+         * 256 MB on affected devices. Past this the decode is refused up front:
+         * an OutOfMemoryError mid-flatten buys the same empty analysis at the
+         * price of a GC freeze, wasted strikes and a harmonic sort left hanging
+         * on "gave up waiting". 64 MB is ~6 minutes at 44.1 kHz.
+         */
+        const val MAX_STRUCTURE_BYTES = 64L * 1024L * 1024L
 
         /**
          * Null open/decode passes before the copy is burnt rather than

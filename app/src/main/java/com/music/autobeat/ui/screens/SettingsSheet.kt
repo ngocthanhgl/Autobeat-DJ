@@ -125,7 +125,6 @@ import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import com.music.autobeat.ui.components.isGlassSupported
 import com.music.autobeat.ui.components.languageDisplayNameRes
-import com.music.autobeat.ui.components.lightweightLiquidGlass
 import com.music.autobeat.ui.components.MessageState
 import com.music.autobeat.ui.components.SearchField
 import com.music.autobeat.ui.components.thumbnailBorder
@@ -2038,12 +2037,7 @@ internal fun SettingsRow(
 
 /**
  * Every on/off toggle on this page through one door: the stock Material3
- * Switch with transparent tracks over liquid glass. The glass sits directly
- * on the Switch's own modifier — no wrapper, so the size is the stock size by
- * construction — and it hugs the stadium track (50% rounding), never a
- * circle halo around it. The checked track carries a translucent primary dye
- * so on and off read instantly. With glass disabled the tracks go back to
- * flat fills, pixel-for-pixel the Switch this replaced.
+ * Switch with the app's primary checked track, as before the glass treatment.
  */
 @Composable
 internal fun GlassSwitch(
@@ -2055,23 +2049,11 @@ internal fun GlassSwitch(
     Switch(
         checked = checked,
         onCheckedChange = onCheckedChange,
-        modifier = modifier.lightweightLiquidGlass(
-            shape = RoundedCornerShape(percent = 50),
-            fallbackColor = if (checked) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.surfaceVariant,
-            // No hairline, no refractive highlight: the Switch's own
-            // (transparent) borders are the edge here, and either glass
-            // treatment reads as a stray ring around the small track.
-            edge = false,
-            highlight = false,
-        ),
+        modifier = modifier,
         enabled = enabled,
         colors = SwitchDefaults.colors(
-            checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
-            uncheckedTrackColor = Color.Transparent,
-            checkedBorderColor = Color.Transparent,
-            uncheckedBorderColor = Color.Transparent,
-            checkedThumbColor = Color.White,
+            checkedTrackColor = MaterialTheme.colorScheme.primary,
+            checkedBorderColor = MaterialTheme.colorScheme.primary,
         ),
     )
 }

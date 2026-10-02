@@ -93,6 +93,34 @@ object AudioDecoder {
     }
 
     /**
+     * Reads the audio sample rate a fully-cached container advertises, without
+     * decoding it. [TrackAnalyzer] needs it for the Pass-1 budget check: the
+     * whole-track decode costs duration × rate × 4 bytes, and the estimate has
+     * to use the container's own rate rather than a guess.
+     */
+    fun containerSampleRate(source: MediaDataSource): Double? {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(source)
+            (0 until extractor.trackCount)
+                .mapNotNull { index ->
+                    val format = extractor.getTrackFormat(index)
+                    val mime = format.getString(MediaFormat.KEY_MIME) ?: return@mapNotNull null
+                    if (!mime.startsWith("audio/") || !format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                        return@mapNotNull null
+                    }
+                    format.getInteger(MediaFormat.KEY_SAMPLE_RATE).takeIf { it > 0 }?.toDouble()
+                }
+                .maxOrNull()
+                ?.takeIf { it.isFinite() && it > 0 }
+        } catch (error: Exception) {
+            TrackLog.w(TAG, "Could not read sample rate from cached media", error)
+            null
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }
+    /**
      * Decodes [startSeconds] to [endSeconds] of [source], downmixed to mono at
      * the container's native rate.
      *
