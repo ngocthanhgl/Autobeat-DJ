@@ -39,7 +39,7 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
         const val BRAKE_DIVE_FACTOR = 0.97f
         // Reverse sweep bounds across the spin window, in x playback rate.
         const val SPIN_START_SPEED = 0.5f
-        const val SPIN_END_SPEED = 4.0f
+        const val SPIN_END_SPEED = 6.0f
     }
 
     @Volatile
@@ -228,7 +228,7 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
      * rendered phase to the controller's current one. Exponential (not
      * linear) because a hand yank starts under the music and whips past it
      * — slow drag, violent end. Grab wobble rides on speed (the hand
-     * re-catching the record), a ~5.5 Hz flutter keeps the read head alive,
+     * re-catching the record), a ~7 Hz flutter keeps the read head alive,
      * and scrub brightness lifts with reverse speed. Level holds ~80%
      * through the first 40% then dives to true zero at the cut, so the
      * exit is a landing, not a mute.
@@ -241,7 +241,7 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
         lastPhase = target
         if (lpState.size != channelCount) lpState = FloatArray(channelCount)
         val twoPi = (2f * kotlin.math.PI).toFloat()
-        val flutterStep = twoPi * 5.5f / sampleRate.coerceAtLeast(8000)
+        val flutterStep = twoPi * 7f / sampleRate.coerceAtLeast(8000)
         outputBuffer.order(ByteOrder.nativeOrder())
         repeat(frameCount) { i ->
             val raw = if (frameCount > 1) start + (target - start) * (i.toFloat() / (frameCount - 1)) else target
@@ -251,14 +251,15 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
             var fr = (f - seg).coerceIn(0f, 1f)
             fr = fr * fr * (3f - 2f * fr)
             val phase = ((seg + fr) / grabs).coerceIn(0f, 1f)
-            // Exponential yank: 0.5x under the music, 4x whip at the cut.
+            // Exponential yank: 0.5x under the music, 6x whip at the cut.
             var rev = SPIN_START_SPEED * Math.pow((SPIN_END_SPEED / SPIN_START_SPEED).toDouble(), phase.toDouble()).toFloat()
-            // Hand wobble on speed: ±18% at 2 cycles per grab.
-            rev *= 1f + 0.18f * kotlin.math.sin(twoPi * grabs * 2f * phase)
-            // Wow/flutter on the read head: ±2% at ~5.5 Hz.
+            // Hand wobble on speed: ±25% at 2 cycles per grab — a harder
+            // re-catch reads as scratch, not glide.
+            rev *= 1f + 0.25f * kotlin.math.sin(twoPi * grabs * 2f * phase)
+            // Wow/flutter on the read head: ±3% at ~7 Hz.
             flutterPhase += flutterStep
             if (flutterPhase > twoPi) flutterPhase -= twoPi
-            reversePos -= rev * (1f + 0.02f * kotlin.math.sin(flutterPhase))
+            reversePos -= rev * (1f + 0.03f * kotlin.math.sin(flutterPhase))
             // Envelope: hold, then smooth dive to true zero.
             val env = ((phase - 0.4f) / 0.6f).coerceIn(0f, 1f)
             val gain = 0.8f * (1f - env * env * (3f - 2f * env))
