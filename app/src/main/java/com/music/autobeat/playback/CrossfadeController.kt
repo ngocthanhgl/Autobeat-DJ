@@ -3496,7 +3496,6 @@ class CrossfadeController(
         lastInHigh = highIn
         eqFilters.incoming(lowIn, into.mid * entryRamp, highIn)
     }
-}
 
     /**
      * DJ send-driving arm (F1 throw / F3 wash): voices the echo throw and the
