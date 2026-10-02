@@ -3434,6 +3434,11 @@ class CrossfadeController(
         val entrySpan = if (longBed) 0.35f else 0.30f
         val entryT = (progress / entrySpan).coerceIn(0f, 1f)
         val entryRamp = (0.40f + 0.60f * (entryT * entryT * (3f - 2f * entryT))).coerceIn(0.40f, 1f)
+        // Booth highs-first entry aims: declared before the dry-kill branch
+        // because the shared tail below voices them on both paths.
+        // Long blend warmth: tame the shimmer mid-blend so body, not air, dominates.
+        val highIn = if (longBed) into.high * (0.70f + 0.30f * entryRamp) else into.high
+        val inMid = into.mid * entryRamp
         if (dryKilled) {
             eqFilters.outgoing(0f, 0f, 0f)
         } else {
@@ -3469,22 +3474,11 @@ class CrossfadeController(
             } else {
                 1f
             }
-            // Booth highs-first entry: the top band rides the schedule × fader
-            // from the foothold (present, never stacked), while the ramp holds
-            // back the mids alone. Gating highs on the ramp too triple-
-            // suppressed the entry (ramp × curve × delay taper) into a hole
-            // followed by a catch-up swell — the up-down the booth never does.
-            // Long blend warmth: tame the shimmer mid-blend so body, not air, dominates.
-            val highIn = if (longBed) into.high * (0.70f + 0.30f * entryRamp) else into.high
-            val inMid = into.mid * entryRamp
-            // Long-blend constant-sum band crossfade: on a 16 s+ bed both
-            // decks hold audible mids/highs through the middle third, and the
-            // tables alone overlap them into mud (djgoals/vibes/DJTT agree —
-            // carve the pocket, don't stack the bands). The outgoing band
-            // recedes in proportion to the incoming band's arrival, so the
-            // power sum stays bounded: A yields exactly where B fills, and
-            // where B is silent A plays the tables untouched. Cut-only, never
-            // a boost, so headroom is untouched; short blends bypass outright.
+            // Constant-sum band crossfade keyed off the shared entry aims above:
+            // the outgoing band recedes in proportion to the incoming band's
+            // arrival (A yields exactly where B fills; where B is silent A
+            // plays the tables untouched). Cut-only, never a boost, so
+            // headroom is untouched; short blends bypass outright.
             val outMid = (out.mid * ownership) *
                 (if (longBed && vocalGate) 1f - 0.5f * inMid.coerceIn(0f, 1f) else 1f)
             val outHigh = (out.high * ownership) *
@@ -3492,9 +3486,9 @@ class CrossfadeController(
             eqFilters.outgoing(lowOut, outMid, outHigh)
         }
         lastInLow = lowIn
-        lastInMid = into.mid * entryRamp
+        lastInMid = inMid
         lastInHigh = highIn
-        eqFilters.incoming(lowIn, into.mid * entryRamp, highIn)
+        eqFilters.incoming(lowIn, inMid, highIn)
     }
 
     /**
