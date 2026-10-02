@@ -3425,20 +3425,34 @@ class CrossfadeController(
             } else {
                 1f
             }
-            eqFilters.outgoing(lowOut, out.mid * ownership, out.high * ownership)
+            // Booth highs-first entry: the top band rides the schedule × fader
+            // from the foothold (present, never stacked), while the ramp holds
+            // back the mids alone. Gating highs on the ramp too triple-
+            // suppressed the entry (ramp × curve × delay taper) into a hole
+            // followed by a catch-up swell — the up-down the booth never does.
+            // Long blend warmth: tame the shimmer mid-blend so body, not air, dominates.
+            val highIn = if (longBed) into.high * (0.70f + 0.30f * entryRamp) else into.high
+            val inMid = into.mid * entryRamp
+            // Long-blend constant-sum band crossfade: on a 16 s+ bed both
+            // decks hold audible mids/highs through the middle third, and the
+            // tables alone overlap them into mud (djgoals/vibes/DJTT agree —
+            // carve the pocket, don't stack the bands). The outgoing band
+            // recedes in proportion to the incoming band's arrival, so the
+            // power sum stays bounded: A yields exactly where B fills, and
+            // where B is silent A plays the tables untouched. Cut-only, never
+            // a boost, so headroom is untouched; short blends bypass outright.
+            val outMid = (out.mid * ownership) *
+                (if (longBed && vocalGate) 1f - 0.5f * inMid.coerceIn(0f, 1f) else 1f)
+            val outHigh = (out.high * ownership) *
+                (if (longBed && vocalGate) 1f - 0.4f * highIn.coerceIn(0f, 1f) else 1f)
+            eqFilters.outgoing(lowOut, outMid, outHigh)
         }
-        // Booth highs-first entry: the top band rides the schedule × fader
-        // from the foothold (present, never stacked), while the ramp holds
-        // back the mids alone. Gating highs on the ramp too triple-
-        // suppressed the entry (ramp × curve × delay taper) into a hole
-        // followed by a catch-up swell — the up-down the booth never does.
-        // Long blend warmth: tame the shimmer mid-blend so body, not air, dominates.
-        val highIn = if (longBed) into.high * (0.70f + 0.30f * entryRamp) else into.high
         lastInLow = lowIn
         lastInMid = into.mid * entryRamp
         lastInHigh = highIn
         eqFilters.incoming(lowIn, into.mid * entryRamp, highIn)
     }
+}
 
     /**
      * DJ send-driving arm (F1 throw / F3 wash): voices the echo throw and the
@@ -3903,7 +3917,17 @@ class CrossfadeController(
      */
     private fun rideVocalSeparation(progress: Float) {
         val amount = render.vocalOverlap.coerceIn(0.0, 1.0)
-        if (amount <= 0.0) {
+        // Long-blend floor: analyzer masks under-report on dense masters, so
+        // a "voiceless" 16 s+ bed still stacks two full-range decks through
+        // the middle third. A 0.25 floor keeps gentle complementary filtering
+        // on every long bed (out LP ~7 kHz end, in HP lifted) while a measured
+        // collision still scales past it. Short blends bypass outright.
+        val effAmount = if (render.mixset && render.overlapSeconds >= 16.0) {
+            max(amount, 0.25)
+        } else {
+            amount
+        }
+        if (effAmount <= 0.0) {
             filters.open()
             return
         }
@@ -3913,14 +3937,14 @@ class CrossfadeController(
         // the same treatment at different speeds.
         // Stock upstream on normal Automix: 1.6 kHz floor. DJ Mode keeps
         // the warmer 300 Hz floor.
-        val floor = glide(open, if (render.mixset) VOCAL_SEPARATION_FLOOR_HZ else STOCK_VOCAL_SEPARATION_FLOOR_HZ, amount)
+        val floor = glide(open, if (render.mixset) VOCAL_SEPARATION_FLOOR_HZ else STOCK_VOCAL_SEPARATION_FLOOR_HZ, effAmount)
         filters.outgoing(
             glide(open, floor, progress.toDouble().pow(FILTER_SWEEP_SHAPE)).toFloat(),
             TransitionFilterProcessor.OFF_HZ,
         )
         filters.incoming(
             TransitionFilterProcessor.OPEN_HZ,
-            entryHighPass(progress, amount, VOCAL_SEPARATION_HIGH_PASS_HZ, ENTRY_OPEN_BY),
+            entryHighPass(progress, effAmount, VOCAL_SEPARATION_HIGH_PASS_HZ, ENTRY_OPEN_BY),
         )
     }
 
