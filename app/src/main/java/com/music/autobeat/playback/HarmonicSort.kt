@@ -73,6 +73,15 @@ object HarmonicSort {
     /** Per-track wait for an analysis to land, aligned with the analyzer's own stuck watchdog. */
     private const val TRACK_TIMEOUT_MS = 90_000L
     private const val POLL_MS = 400L
+    /**
+     * Parked ids earn retries, not a life sentence: a deep online track's
+     * single 90 s attempt usually dies on a cold resolve + full download
+     * behind the current track's own decode — not on an unmeasurable file.
+     * Up to 3 attempts, and only once the track is within 6 slots of the
+     * front (bytes warm, lane likelier free). Locals still land first try.
+     */
+    private const val MAX_ATTEMPTS = 3
+    private const val RETRY_WINDOW = 6
 
     /** How far the toggle has got through the scope, or null while not measuring. */
     data class Progress(val done: Int, val total: Int)
@@ -180,8 +189,8 @@ object HarmonicSort {
      * the tracks already placed.
      */
     private var scopeIds: List<String> = emptyList()
-    /** Ids this activation already attempted: unmeasurable ones park here so the drain never spins on them. */
-    private val attempted = mutableSetOf<String>()
+    /** Attempt counts per id this activation: unmeasurable ones park here so the drain never spins on them. */
+    private val attempted = mutableMapOf<String, Int>()
     private var worker: Job? = null
     private var generation = 0
 
@@ -288,7 +297,7 @@ object HarmonicSort {
                     if (it is CancellationException) throw it
                     TrackLog.w("Autobeat", "harmonic track $next failed: ${it.message}", it, null)
                 }
-            attempted += next
+            attempted[next] = (attempted[next] ?: 0) + 1
             if (myGeneration != generation) return
             val usable = deps.analyzer.analysisFor(next).isUsable
             TrackLog.d("Autobeat", "harmonic measured $next usable=$usable", null)
@@ -326,11 +335,21 @@ object HarmonicSort {
         scopeIds = (scopeIds.filter { it in live } + window).distinct()
     }
 
-    /** First window track with no usable analysis that this activation hasn't attempted. */
-    private fun nextNeedingMeasure(player: Player, deps: Deps): String? =
-        upcomingIds(player).take(MAX_SORT_AHEAD).firstOrNull {
-            it !in attempted && !deps.analyzer.analysisFor(it).isUsable
+    /**
+     * First window track with no usable analysis: never-attempted ids first,
+     * then the frontmost id with attempts left once it is within the retry
+     * window. The frontier advances instead of freezing at track2.
+     */
+    private fun nextNeedingMeasure(player: Player, deps: Deps): String? {
+        val window = upcomingIds(player).take(MAX_SORT_AHEAD)
+        window.firstOrNull {
+            (attempted[it] ?: 0) == 0 && !deps.analyzer.analysisFor(it).isUsable
+        }?.let { return it }
+        return window.take(RETRY_WINDOW).firstOrNull {
+            val n = attempted[it] ?: 0
+            n in 1 until MAX_ATTEMPTS && !deps.analyzer.analysisFor(it).isUsable
         }
+    }
 
     /** Publishes usable-vs-window so the pill always reads a count, never a bare icon. */
     private fun publishProgress(player: Player, deps: Deps) {
@@ -379,7 +398,14 @@ object HarmonicSort {
         val host = player ?: return
         val liveIndex = host.indexOfId(id) ?: return
         val uri = host.getMediaItemAt(liveIndex).localConfiguration?.uri ?: return
-        deps.cache.forceFullPull(listOf(id))
+        // Warm the two behind it too: the worker measures sequentially, so
+        // by the time it reaches them their bytes are already on disk
+        // instead of each starting its resolve cold inside its own 90 s.
+        val follow = (1..2).mapNotNull { off ->
+            val i = liveIndex + off
+            if (i < host.mediaItemCount) host.getMediaItemAt(i).mediaId else null
+        }
+        deps.cache.forceFullPull(listOf(id) + follow)
         deps.analyzer.request(id, uri, durationSeconds(host, liveIndex))
         try {
             withTimeout(TRACK_TIMEOUT_MS) {

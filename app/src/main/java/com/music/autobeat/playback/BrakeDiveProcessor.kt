@@ -73,6 +73,14 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
     // to the newest tap whenever a spin starts, then walks backwards for the
     // whole window without ever jumping.
     private var reversePos = 0f
+    // Last phase actually rendered (audio-rate stepping below walks from
+    // here to spinPhase inside one buffer, so the sweep never stair-steps
+    // at the controller's ~30 Hz tick).
+    private var lastPhase = -1f
+    // Wow/flutter oscillator phase + one-pole lowpass state per channel
+    // (for the scrub-brightness lift).
+    private var flutterPhase = 0f
+    private var lpState = FloatArray(0)
 
     /** Aims the brake. [amount] 0..1 where 1 = full stop. */
     fun setBrake(amount: Float) {
@@ -99,6 +107,8 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
             // the hand for the whole sweep.
             reversePos = ringPos.toFloat()
             spinGrabs = grabs.coerceIn(1, 4)
+            lastPhase = -1f
+            flutterPhase = 0f
         }
         spinPhase = p
     }
@@ -133,12 +143,14 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
         ringPos = 0
         ringFilled = 0
         spinPhase = -1f
+        lastPhase = -1f
     }
 
     override fun onReset() {
         targetBrakeAmount = 0f
         isBackspin = false
         spinPhase = -1f
+        lastPhase = -1f
         ringPos = 0
         ringFilled = 0
     }
@@ -211,35 +223,52 @@ class BrakeDiveProcessor : BaseAudioProcessor() {
     }
 
     /**
-     * The spinback: walk the ring backwards at an accelerating reverse rate
-     * with linear interpolation between frames, so the ear hears one
-     * continuous rewind sweep instead of stepped chirps. Level holds through
-     * the first half (a real hand keeps the fader up while it drags) then
-     * dives toward the cut — but never below a quarter, so the whip's tail
-     * stays audible into the flip instead of being buried under it.
+     * The spinback: walk the ring backwards at an exponential reverse rate
+     * with linear interpolation, stepped per audio frame from the last
+     * rendered phase to the controller's current one. Exponential (not
+     * linear) because a hand yank starts under the music and whips past it
+     * — slow drag, violent end. Grab wobble rides on speed (the hand
+     * re-catching the record), a ~5.5 Hz flutter keeps the read head alive,
+     * and scrub brightness lifts with reverse speed. Level holds ~80%
+     * through the first 40% then dives to true zero at the cut, so the
+     * exit is a landing, not a mute.
      */
     private fun renderSpin(outputBuffer: ByteBuffer, frameCount: Int) {
-        // The hand, mapped through the grab stutter: each grab accelerates
-        // then hesitates (smoothstep per segment), so 2-3 grabs read as the
-        // hand re-catching the record instead of one clean pull.
         val grabs = spinGrabs.coerceIn(1, 4)
-        val raw = spinPhase.coerceIn(0f, 1f)
-        val f = (raw * grabs).coerceIn(0f, grabs.toFloat())
-        val seg = floor(f).toInt().coerceAtMost(grabs - 1)
-        var fr = (f - seg).coerceIn(0f, 1f)
-        fr = fr * fr * (3f - 2f * fr)
-        val phase = ((seg + fr) / grabs).coerceIn(0f, 1f)
-        // 0.5x -> 4x across the window: the drag starts under the music and
-        // ends whipping past it.
-        val revSpeed = SPIN_START_SPEED + phase * (SPIN_END_SPEED - SPIN_START_SPEED)
-        // Hold ~80% through the first half, dive toward the cut with the
-        // tail still speaking (0.25 floor — the old 0.1 buried the whip).
-        val gain = if (phase < 0.5f) 0.8f else (0.8f * (1f - (phase - 0.5f) * 1.5f)).coerceAtLeast(0.25f)
+        val target = spinPhase.coerceIn(0f, 1f)
+        if (lastPhase < 0f) lastPhase = target
+        val start = lastPhase.coerceIn(0f, 1f)
+        lastPhase = target
+        if (lpState.size != channelCount) lpState = FloatArray(channelCount)
+        val twoPi = (2f * kotlin.math.PI).toFloat()
+        val flutterStep = twoPi * 5.5f / sampleRate.coerceAtLeast(8000)
         outputBuffer.order(ByteOrder.nativeOrder())
-        repeat(frameCount) {
-            reversePos -= revSpeed
+        repeat(frameCount) { i ->
+            val raw = if (frameCount > 1) start + (target - start) * (i.toFloat() / (frameCount - 1)) else target
+            // Grab stutter on phase (re-catch hesitation, smoothstepped).
+            val f = (raw * grabs).coerceIn(0f, grabs.toFloat())
+            val seg = floor(f).toInt().coerceAtMost(grabs - 1)
+            var fr = (f - seg).coerceIn(0f, 1f)
+            fr = fr * fr * (3f - 2f * fr)
+            val phase = ((seg + fr) / grabs).coerceIn(0f, 1f)
+            // Exponential yank: 0.5x under the music, 4x whip at the cut.
+            var rev = SPIN_START_SPEED * Math.pow((SPIN_END_SPEED / SPIN_START_SPEED).toDouble(), phase.toDouble()).toFloat()
+            // Hand wobble on speed: ±18% at 2 cycles per grab.
+            rev *= 1f + 0.18f * kotlin.math.sin(twoPi * grabs * 2f * phase)
+            // Wow/flutter on the read head: ±2% at ~5.5 Hz.
+            flutterPhase += flutterStep
+            if (flutterPhase > twoPi) flutterPhase -= twoPi
+            reversePos -= rev * (1f + 0.02f * kotlin.math.sin(flutterPhase))
+            // Envelope: hold, then smooth dive to true zero.
+            val env = ((phase - 0.4f) / 0.6f).coerceIn(0f, 1f)
+            val gain = 0.8f * (1f - env * env * (3f - 2f * env))
+            // Scrub brightness: HF lift follows reverse speed.
+            val lift = 0.6f * ((rev - SPIN_START_SPEED) / (SPIN_END_SPEED - SPIN_START_SPEED)).coerceIn(0f, 1f)
             for (ch in 0 until channelCount) {
-                val s = ringAt(reversePos, ch) * gain
+                val x = ringAt(reversePos, ch)
+                val lp = lpState[ch] + 0.1f * (x - lpState[ch])
+                lpState[ch] = lp
+                val s = (x + (x - lp) * lift) * gain
                 if (encoding == C.ENCODING_PCM_FLOAT) {
                     outputBuffer.putFloat(s.coerceIn(-1f, 1f))
                 } else {

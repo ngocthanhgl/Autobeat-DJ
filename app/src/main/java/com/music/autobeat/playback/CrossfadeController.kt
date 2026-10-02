@@ -60,17 +60,20 @@ import java.util.Locale
 
 /**
  * Tempo glide-back factor for a beatmatched handoff: 1 at the fade start,
- * easing to 0 (own tempo) by its end. The glide window scales with the
- * stretch magnitude — an 8% nudge rides home over the last 40% of the fade
- * while a half-time 50% stretch starts coming back at 25% — so small
- * corrections stay locked to the shared grid as long as possible and big
- * ones still land home without a snap. Smoothstepped, so both ends of the
- * ride have zero slope and no kink is audible.
+ * easing to 0 (own tempo) by 90% of the fade — NOT at the handoff tick.
+ * Landing home early means finish() finds no residual to snap: the last
+ * tenth of the mix plays at native tempo, locked, instead of converging
+ * into the flip. The window still scales with stretch magnitude (small
+ * corrections stay on the shared grid longest). Smoothstepped, so both
+ * ends of the ride have zero slope and no kink is audible.
  */
 fun tempoGlideFactor(progress: Float, stretch: Double): Double {
     val portion = (abs(stretch - 1.0) * 5.0).coerceIn(0.25, 0.75).toFloat()
     val start = 1f - portion
-    val t = ((progress - start) / portion).coerceIn(0f, 1f)
+    // Converge at 0.9, not 1.0: denominator is the run-up to the landing,
+    // so glide(0.9+) == 0 and the deck sits at home through the flip.
+    val end = 0.9f
+    val t = ((progress - start) / (end - start).coerceAtLeast(0.05f)).coerceIn(0f, 1f)
     val s = t * t * (3f - 2f * t)
     return 1.0 - s
 }
@@ -2678,7 +2681,9 @@ class CrossfadeController(
             // ExoPlayer re-prepares its audio pipeline on every parameter
             // change, so ~33 commits/second of inaudible deltas is 33
             // chances/second to glitch (the tempo stutter). Commits only
-            // when the rate audibly moved (>= 0.15% since last commit).
+            // when the rate audibly moved (>= 0.05% since last commit —
+            // the old 0.15% quantized the converge into steps the ear
+            // could just catch at the landing).
             // Click fix: the old glide>0.02 outer gate is gone — it skipped
             // the final converge, stranding the deck ~1-2% off-tempo so
             // finish() snapped it at full volume. The coalescer below
@@ -2688,7 +2693,7 @@ class CrossfadeController(
             val newPitch = 2.0.pow(shift / 12.0 * glide).toFloat()
             val last = lastCommittedRate
             if (last == null ||
-                abs(newRate - last) / last.coerceAtLeast(1e-6f) >= 0.0015f
+                abs(newRate - last) / last.coerceAtLeast(1e-6f) >= 0.0005f
             ) {
                 player.setPlaybackParameters(PlaybackParameters(newRate, newPitch))
                 lastCommittedRate = newRate
@@ -3008,9 +3013,16 @@ class CrossfadeController(
                 // at full volume.
                 val live = it.playbackParameters
                 val wantSpeed = AppSettings.playbackSpeed.value
-                val rateActuallyOff =
-                    abs(live.speed - wantSpeed) / wantSpeed.coerceAtLeast(1e-6f) >= 0.003f ||
-                        abs(live.pitch - 1f) >= 0.003f
+                val speedOff = abs(live.speed - wantSpeed) / wantSpeed.coerceAtLeast(1e-6f)
+                val pitchOff = abs(live.pitch - 1f)
+                val rateActuallyOff = speedOff >= 0.003f || pitchOff >= 0.003f
+                // Glide lands at 0.9 now, so a completed blend has no
+                // residual by construction — but an interrupted fade can
+                // strand a sub-1% drift. Snapping that at full volume is
+                // worse than leaving it: sub-1% is inaudible as a tempo
+                // error and the deck retires at the next handoff anyway.
+                // Only a big residual (>= 1%) earns an early snap.
+                val residualBig = speedOff >= 0.01f || pitchOff >= 0.01f
                 TrackLog.d(
                     TAG,
                     "finish handedOff lastProgress=$lastProgress live=${live.speed}x${live.pitch} " +
@@ -3022,7 +3034,7 @@ class CrossfadeController(
                 // and leaving a shifted deck for the whole next track is worse
                 // than a guarded reset. deckRateReset still prevents doubles.
                 if (rateApplied && !deckRateReset &&
-                    (lastProgress >= 0.98f || rateActuallyOff) &&
+                    (lastProgress >= 0.98f || residualBig) &&
                     (tempoGlideFactor(lastProgress, incomingPlaybackRate) > 0.02 || rateActuallyOff)
                 ) {
                     it.setPlaybackParameters(PlaybackParameters(AppSettings.playbackSpeed.value, 1f))
@@ -3207,7 +3219,9 @@ class CrossfadeController(
         // B's volume there is still only ~0.45, so the early rise reads as a
         // clean handoff, not mud.
         val delay = render.delayBMids || liveDelayB > 0.5f || liveDelayLatchedB
-        val vocalGate = duck || delay || render.vocalOverlap > 0.2
+        // Trace vocals (0.10+) now gate: analyzer masks under-report on
+        // dense masters, and 0.20 let sung beds slip through silent.
+        val vocalGate = duck || delay || render.vocalOverlap > 0.1
         // Energy fix P0-1: voice the schedules off the GATED progress, not the
         // raw tick. heavyClash holds A and delays B (outgoingHoldSec /
         // incomingStartDelaySec); on raw progress its EQ handed the bass off at
@@ -3289,6 +3303,20 @@ class CrossfadeController(
                 // Warmth + vocal: quadratic yield for both beds so duck
                 // only when recipe truly duels, not on transient vocalGate.
                 lin * lin
+            } else if (longBed && vocalGate) {
+                // Mid-swap: the outgoing vocal owns its band until the
+                // downbeat-snapped bass swap fires, then yields across the
+                // back of the blend. No snap machine of its own — it rides
+                // the swap's fire event, so mids and bass hand over on the
+                // same downbeat. Without a swap event (table-driven type)
+                // the yield runs from the blend start instead.
+                if (swapAt.isFinite() && !eqSwapFired) {
+                    1f
+                } else {
+                    val s = if (swapAt.isFinite()) eqSwapStartProgress else 0f
+                    val lin = ((0.85f - outProgress) / (0.85f - s).coerceAtLeast(0.05f)).coerceIn(0f, 1f)
+                    lin * lin
+                }
             } else {
                 1f
             }
@@ -3534,8 +3562,12 @@ class CrossfadeController(
                     )
                 }
                 // DJ-only: backspin voices ½-beat dub while spinning, not only post-cut.
+                // Quadratic rise to full echoAmount at the flip so the
+                // post-cut stepped close (from throwAmount at progress 1)
+                // continues the voice instead of stepping up from a quiet
+                // bed — that step was the snap at the landing.
                 if (render.mixset && render.backspin && render.echoThrow && render.echoAmount > 0.0 && render.echoBeatSeconds > 0.0) {
-                    val dub = (render.echoAmount * 0.30 * progress).coerceIn(0.0, 0.5).toFloat()
+                    val dub = (render.echoAmount * progress * progress).coerceIn(0.0, 0.5).toFloat()
                     echoFilters.outgoing(dub, render.echoBeatSeconds.toFloat())
                 } else {
                     echoFilters.open()

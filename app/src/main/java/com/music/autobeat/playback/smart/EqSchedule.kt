@@ -134,16 +134,18 @@ object EqSchedule {
                     Key(1f, EqGains.SILENT),
                 )
             } else if (longBed) {
-                // Real-DJ long blend: keep warmth per Vibes slow blend
-                // Minimal 10% steps — first mid move at 0.38 (not 0.22),
-                // highs staged so bed evolves without early energy dip.
+                // Real-DJ long blend: the outgoing vocal yields early (unity
+                // only to 0.20) so the incoming voice owns the band by
+                // mid-blend — coexistence past the first fifth is what made
+                // long blends read as a loud plain crossfade.
                 listOf(
                     Key(0f, EqGains.UNITY),
-                    Key(0.38f, EqGains.UNITY),
-                    Key(0.50f, EqGains(1f, 0.80f, 1f)),
-                    Key(0.65f, EqGains(1f, 0.65f, 0.92f)),
-                    Key(0.80f, EqGains(1f, 0.40f, 0.72f)),
-                    Key(0.92f, EqGains(1f, 0.18f, 0.45f)),
+                    Key(0.20f, EqGains.UNITY),
+                    Key(0.35f, EqGains(1f, 0.80f, 1f)),
+                    Key(0.50f, EqGains(1f, 0.55f, 0.92f)),
+                    Key(0.65f, EqGains(1f, 0.35f, 0.72f)),
+                    Key(0.80f, EqGains(1f, 0.18f, 0.50f)),
+                    Key(0.92f, EqGains(1f, 0.10f, 0.30f)),
                     Key(1f, EqGains.SILENT),
                 )
             } else {
@@ -197,16 +199,16 @@ object EqSchedule {
                     Key(1f, EqGains.SILENT),
                 )
             } else if (longBed) {
-                // Real-DJ long blend: coexist to 0.30 (not 0.52), then trade
-                // across the back two-thirds — the key match earns time, not
-                // a 30-second freeze at unity.
+                // Real-DJ long blend: coexist to 0.20 (not 0.30) — the key
+                // match earns a handoff, not a freeze, and the incoming
+                // voice is already filling by then.
                 listOf(
                     Key(0f, EqGains.UNITY),
-                    Key(0.30f, EqGains.UNITY),
-                    Key(0.45f, EqGains(1f, 0.80f, 1f)),
-                    Key(0.60f, EqGains(1f, 0.60f, 0.90f)),
-                    Key(0.75f, EqGains(1f, 0.38f, 0.72f)),
-                    Key(0.88f, EqGains(1f, 0.18f, 0.50f)),
+                    Key(0.20f, EqGains.UNITY),
+                    Key(0.35f, EqGains(1f, 0.80f, 1f)),
+                    Key(0.50f, EqGains(1f, 0.60f, 0.90f)),
+                    Key(0.65f, EqGains(1f, 0.38f, 0.72f)),
+                    Key(0.80f, EqGains(1f, 0.18f, 0.50f)),
                     Key(1f, EqGains.SILENT),
                 )
             } else {
@@ -335,9 +337,13 @@ object EqSchedule {
                         Key(0.50f, EqGains.UNITY),
                     )
                 } else {
+                    // Highs-first entry even without the delay flag: hats
+                    // and air arrive over the outgoing vocal, mids fill
+                    // only as A yields — never two full vocal bands from
+                    // second 0 on a 20 s+ bed.
                     listOf(
-                        Key(0f, EqGains(1f, 0.80f, 1f)),
-                        Key(0.30f, EqGains(1f, 0.90f, 1f)),
+                        Key(0f, EqGains(1f, 0f, 1f)),
+                        Key(0.25f, EqGains(1f, 0.50f, 1f)),
                         Key(0.50f, EqGains.UNITY),
                     )
                 }

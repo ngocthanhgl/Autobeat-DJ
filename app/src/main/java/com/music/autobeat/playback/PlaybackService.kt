@@ -4376,7 +4376,12 @@ class PlaybackService : MediaLibraryService() {
             trackAnalyzer.priorityIds = emptySet()
             return emptyList()
         }
-        val ids = (nextIndex..minOf(nextIndex + 1, player.mediaItemCount - 1))
+        // Harmonic Sort measures deep: while it is active the full-size head
+        // escalation reaches next-4 (not next-2), so tracks 3-4 analyze off
+        // whole heads instead of capped 16 MB/4 MB stubs. Playback prefetch
+        // is untouched — this is analysis heads only.
+        val depth = if (HarmonicSort.isActive) 3 else 1
+        val ids = (nextIndex..minOf(nextIndex + depth, player.mediaItemCount - 1))
             .map { player.getMediaItemAt(it).mediaId }
         trackAnalyzer.priorityIds = ids.toSet()
         return ids
