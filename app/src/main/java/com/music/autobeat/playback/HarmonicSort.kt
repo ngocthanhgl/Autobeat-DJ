@@ -199,6 +199,15 @@ object HarmonicSort {
     private val attempted = mutableMapOf<String, Int>()
     private var worker: Job? = null
     private var generation = 0
+    /**
+     * Trailing-edge debounce for re-applying the sort: a burst of landings
+     * (store hits arrive in milliseconds) folds into one queue edit instead
+     * of one PLAYLIST_CHANGED per track, which used to churn the analyzer's
+     * next slot under its own feet. Lonely landings sail straight through.
+     */
+    private const val SORT_APPLY_DEBOUNCE_MS = 2_000L
+    private var lastSortApplyMs = 0L
+    private var sortApplyPending = false
 
     /** What the sort borrows from the service: its scope, analyzer, and disk cache. */
     class Deps(
@@ -250,6 +259,8 @@ object HarmonicSort {
         }
         this.scopeIds = scopeIds
         attempted.clear()
+        lastSortApplyMs = 0L
+        sortApplyPending = false
         _active.value = true
         _progress.value = Progress(0, scopeIds.size)
         generation++
@@ -292,6 +303,9 @@ object HarmonicSort {
             extendScope(live)
             publishProgress(live, deps)
             val next = nextNeedingMeasure(live, deps) ?: run {
+                // Flush a debounced apply before parking: otherwise the last
+                // landing's order never reaches the queue.
+                if (sortApplyPending) maybeApplySort(live, deps, force = true)
                 TrackLog.d("Autobeat", "harmonic worker parked, window measured", null)
                 return
             }
@@ -307,14 +321,11 @@ object HarmonicSort {
             if (myGeneration != generation) return
             val usable = deps.analyzer.analysisFor(next).isUsable
             TrackLog.d("Autobeat", "harmonic measured $next usable=$usable", null)
-            // Real-time: every landing re-sorts and re-applies immediately,
-            // so the queue visibly jumps track by track while measuring.
-            // Store-hit tracks land in milliseconds, so the first jumps
-            // come almost at once.
-            current()?.let { l ->
-                runCatching { sortAndApply(l, deps, scopeIds) }
-                    .onFailure { TrackLog.w("Autobeat", "harmonic apply failed: ${it.message}", it, null) }
-            }
+            // Real-time but debounced: a burst of store-hit landings folds
+            // into one apply instead of churning PLAYLIST_CHANGED (and the
+            // analyzer's next slot) per track. Lonely landings sail straight
+            // through — the debounce only bites inside the window.
+            current()?.let { l -> maybeApplySort(l, deps) }
             if (myGeneration != generation) return
             publishProgress(current() ?: live, deps)
         }
@@ -411,7 +422,15 @@ object HarmonicSort {
             val i = liveIndex + off
             if (i < host.mediaItemCount) host.getMediaItemAt(i).mediaId else null
         }
-        deps.cache.forceFullPull(listOf(id) + follow)
+        // In-window pulls only: the service owns current+next bytes through
+        // its own pulls, and the old unconditional pull evicted them (and was
+        // evicted in turn), so nothing ever completed. Deep tracks analyze
+        // off their heads instead of starving the front; a cold priorityIds
+        // (service hasn't published yet) still pulls the one id, never the
+        // followers.
+        val priority = deps.analyzer.priorityIds
+        val wanted = (listOf(id) + follow).filter { it in priority }
+        deps.cache.forceFullPull(if (wanted.isNotEmpty()) wanted else listOf(id))
         deps.analyzer.request(id, uri, durationSeconds(host, liveIndex))
         try {
             withTimeout(TRACK_TIMEOUT_MS) {
@@ -534,6 +553,23 @@ object HarmonicSort {
     /** The boost only fires where a lift belongs: PEAK everywhere, ARC near its top. */
     private fun isPeakSlot(vibe: Vibe, slotFraction: Double): Boolean =
         vibe == Vibe.PEAK || (vibe == Vibe.ARC && slotFraction in 0.5..0.8)
+
+    /**
+     * Trailing-edge debounced [sortAndApply]: inside the window the apply is
+     * remembered, not run, and the next call past the window applies once for
+     * the whole burst. [force] flushes (worker parking).
+     */
+    private fun maybeApplySort(player: Player, deps: Deps, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastSortApplyMs < SORT_APPLY_DEBOUNCE_MS) {
+            sortApplyPending = true
+            return
+        }
+        lastSortApplyMs = now
+        sortApplyPending = false
+        runCatching { sortAndApply(player, deps, scopeIds) }
+            .onFailure { TrackLog.w("Autobeat", "harmonic apply failed: ${it.message}", it, null) }
+    }
 
     /**
      * Rearranges the tracks still to come into the highest-scoring chain, in

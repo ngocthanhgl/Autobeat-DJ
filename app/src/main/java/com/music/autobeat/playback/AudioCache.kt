@@ -493,9 +493,14 @@ object AudioCache {
     /**
      * What [forceFullPull] is filling right now. [fetchWhole] and
      * [cacheWholeOnce] treat these like the read-ahead head: worth spending
-     * bytes on until the queue moves on.
+     * bytes on until the queue moves on. Unioned across callers, never
+     * replaced: the old replace-and-cancel let the sort worker's deep-window
+     * pulls evict the service's current+next pull (and vice versa), so no
+     * track's bytes ever completed and analysis starved with sort on. Each
+     * id owns one job in [forceJobs]; a re-pull for an id already in flight
+     * is a no-op instead of a restart.
      */
-    private var forceJob: Job? = null
+    private val forceJobs = mutableMapOf<String, Job>()
     private var forceTargets: List<String> = emptyList()
 
     /**
@@ -664,8 +669,8 @@ object AudioCache {
         job?.cancel()
         job = null
         forceTargets = emptyList()
-        forceJob?.cancel()
-        forceJob = null
+        forceJobs.values.forEach { it.cancel() }
+        forceJobs.clear()
     }
 
     /**
@@ -691,18 +696,22 @@ object AudioCache {
         val videoIds = mediaIds.filter { SourceRegistry.parseTrackKey(it) == null }
             .filter { !it.startsWith("content://") }
             .filter { it !in Downloads.saved.value }
-        if (videoIds == forceTargets) return
-        forceTargets = videoIds
-        forceJob?.cancel()
-        forceJob = scope.launch {
-            videoIds.forEach { id ->
-                launch(TrackLog.about(id)) {
+        if (videoIds.isEmpty()) return
+        // Union, not replace: every caller (service current+next, mid-track
+        // eager pull, sort worker in-window) adds its ids without evicting
+        // the others' in-flight pulls. Completed ids remove themselves, so
+        // the set only ever holds live work.
+        forceTargets = (forceTargets + videoIds).distinct()
+        videoIds.forEach { id ->
+            if (forceJobs[id]?.isActive != true) {
+                forceJobs[id] = scope.launch(TrackLog.about(id)) {
                     fetchWhole(id)
                     // Done owning it either way — fully cached or given up
                     // (see [fetchWhole]): the delayed read-ahead half
                     // re-checks at fire time and picks up whatever is left,
                     // sequentially, never alongside this writer.
                     forceTargets = forceTargets - id
+                    forceJobs.remove(id)
                 }
             }
         }

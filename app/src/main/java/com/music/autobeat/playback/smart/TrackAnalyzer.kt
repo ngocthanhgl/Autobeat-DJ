@@ -561,7 +561,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
     fun request(trackId: String, uri: Uri, durationSeconds: Double) {
         if (trackId.isBlank()) return
         if (trackId in running) return
-        // Long-track skip is DJ-only: a 10+ minute track is recorded
+        // Long-track skip is DJ-only: an 8+ minute track is recorded
         // ready-but-empty so the DJ planner renders it plainly. Stock upstream
         // analyses long tracks normally, so normal Automix falls through.
         if (AppSettings.mixsetModeEnabled.value &&
@@ -2044,25 +2044,27 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
 
         /**
          * Tracks longer than this are never analyzed: a full decode plus
-         * inference pass over 10+ minutes costs heat and battery for
+         * inference pass over 8+ minutes costs heat and battery for
          * transitions the track will rarely need, and the planner already
          * knows how to render an unmeasured track (plain dissolve). Recorded
          * as ready-but-empty at the [request] gate, so it is not retried.
          */
-        const val MAX_ANALYSIS_DURATION_SECONDS = 600.0
+        const val MAX_ANALYSIS_DURATION_SECONDS = 480.0
 
         /**
          * The largest whole-track mono float decode Pass 1 may attempt.
          *
          * The decode costs duration × container rate × 4 bytes in one
-         * contiguous buffer — 130 MB for an 11-minute file at 48 kHz — and the
+         * contiguous buffer — ~92 MB for an 8-minute file at 48 kHz — and the
          * heap holding it beside the resampled copy and the Pass-2 models is
-         * 256 MB on affected devices. Past this the decode is refused up front:
+         * the large heap (see android:largeHeap in the manifest), so 128 MB
+         * still leaves headroom. Past this the decode is refused up front:
          * an OutOfMemoryError mid-flatten buys the same empty analysis at the
          * price of a GC freeze, wasted strikes and a harmonic sort left hanging
-         * on "gave up waiting". 64 MB is ~6 minutes at 44.1 kHz.
+         * on "gave up waiting". 128 MB fits an 8-minute track at 48 kHz;
+         * anything longer is refused here and at the [request] duration gate.
          */
-        const val MAX_STRUCTURE_BYTES = 64L * 1024L * 1024L
+        const val MAX_STRUCTURE_BYTES = 128L * 1024L * 1024L
 
         /**
          * Null open/decode passes before the copy is burnt rather than
