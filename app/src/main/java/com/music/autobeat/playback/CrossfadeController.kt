@@ -39,6 +39,9 @@ import com.music.autobeat.playback.smart.orZero
 import com.music.autobeat.playback.smart.VOCAL_ACTIVE_THRESHOLD
 import com.music.autobeat.playback.smart.MIN_GUARANTEED_BLEND_SECONDS
 import com.music.autobeat.playback.smart.MIN_BEATMATCH_CONFIDENCE
+import com.music.autobeat.playback.smart.firstDropSec
+import com.music.autobeat.playback.smart.isDropTrusted
+import com.music.autobeat.playback.smart.firstVocalStartSec
 import kotlin.math.max
 import kotlin.math.min
 import com.music.autobeat.playback.smart.plainDissolvePlan
@@ -92,6 +95,37 @@ private fun tempoGridTrusted(a: TrackAnalysis): Boolean {
     if (a.provisionalHead) return false
     if (a.downbeats.isEmpty()) return false
     return true
+}
+
+/**
+ * Drop-cut arm: B-timeline second at which A should be cut so B's drop (or
+ * vocal entry) lands clean. Trusted scored drop wins, snapped to B's
+ * downbeat (±2 beats); vocal-entry fallback when the drop is a guess. The
+ * target must sit mid-blend (30–92%) with a 1-beat lead (min 250 ms) so the
+ * cut lands ON the drop, not after it. Null = blend runs its course.
+ */
+private fun dropCutFireAt(
+    next: TrackAnalysis?,
+    cueSec: Double,
+    overlapSec: Double,
+): Double? {
+    if (next == null || overlapSec < 16.0) return null
+    var target = if (isDropTrusted(next)) firstDropSec(next) else null
+    if (target == null || !target.isFinite()) {
+        target = firstVocalStartSec(next, cueSec, cueSec + overlapSec)
+    }
+    if (target == null || !target.isFinite()) return null
+    if (target < cueSec + 0.3 * overlapSec || target > cueSec + 0.92 * overlapSec) return null
+    val beatSec = next.beatInterval.takeIf { it > 0 }
+        ?: next.bpm.takeIf { it > 0 }?.let { 60.0 / it } ?: 0.0
+    var fireAt = target
+    if (beatSec > 0 && next.downbeats.isNotEmpty()) {
+        next.downbeats.minByOrNull { abs(it - target) }?.let { snap ->
+            if (abs(snap - target) <= 2 * beatSec) fireAt = snap
+        }
+    }
+    val lead = if (beatSec > 0) beatSec.coerceIn(0.25, 1.0) else 0.5
+    return (fireAt - lead).coerceAtLeast(cueSec)
 }
 
 /**
@@ -418,6 +452,14 @@ class CrossfadeController(
         /** v2 §7a: overlap length in seconds, gating the mid-kill. */
         val overlapSeconds: Double = 0.0,
         /**
+         * Drop-cut target: B-timeline second at which A gets cut so B's drop
+         * lands clean instead of smeared under A's smooth tail. Armed at ARM
+         * from a trusted drop (snapped to B's downbeat, minus 1-beat lead)
+         * with vocal-entry fallback; null = no cut, blend runs its course.
+         * DJ-only long beds read it in driveFade.
+         */
+        val bDropCutSec: Double? = null,
+        /**
          * DJ-EQ spec: which schedule table this fade rides. The standard
          * (non-Smart) path leaves the default; only [considerSmartTransition]
          * voices a real type, because only it snapshots the grids the bass
@@ -650,6 +692,8 @@ class CrossfadeController(
     private var reactHoldFired = false
     private var reactDuckFired = false
     private var reactAMean: Double? = null
+    // Drop-cut one-shot latch (see driveFade). Rearmed in begin().
+    private var dropCutFired = false
     // DJ reactive engine R1+R2: one pair's worth of spontaneity, rolled once
     // per pair and re-applied per tick (see Humanize.kt). Session-scoped,
     // never rearmed; draws are keyed on the pair, so a repeat-all lap
@@ -1885,6 +1929,17 @@ class CrossfadeController(
                 sharedBpm = if (plan.type == TransitionType.HALF_TIME_BLEND) plan.outgoingBpm else 0.0,
                 keyScore = plan.score.key,
                 overlapSeconds = plan.fadeSeconds,
+                // Drop-cut arm (DJ-only long blend styles): B-timeline second
+                // where A gets cut for B's drop. Null anywhere else — the
+                // blend runs its course.
+                bDropCutSec =
+                    if (mixset && (plan.transitionStyle == TransitionStyle.DJ_BLEND ||
+                            plan.transitionStyle == TransitionStyle.DJ_FILTER)
+                    ) {
+                        dropCutFireAt(nextAnalysis, plan.incomingCueTime, plan.fadeSeconds)
+                    } else {
+                        null
+                    },
                 eqType = plan.type,
                 // Stock upstream on normal Automix: flat unity, no EQ voicing.
                 // DJ Mode keeps the schedule ride.
@@ -2240,6 +2295,7 @@ class CrossfadeController(
         reactHoldFired = false
         reactDuckFired = false
         reactAMean = null
+        dropCutFired = false
         spanCapLogged = false
         outgoing = out
         incoming = into
@@ -2944,6 +3000,51 @@ class CrossfadeController(
             } else {
                 val s = t * t * (3f - 2f * t)
                 b.volume = (bRampFromVol + (1f - bRampFromVol) * s).coerceIn(0f, 1f)
+            }
+        }
+        // Drop-cut (DJ-only long beds): B's drop/vocal entry cuts A instead
+        // of smoothing A over it. One-shot per fade; the target carries a
+        // 1-beat lead so the cut lands ON the drop. Corroborated against the
+        // ARM snapshots (vocal hot, or energy stepping up >=30% into the
+        // window) so a phantom target fails silent and the planned smooth
+        // blend runs its course. Braked/spun decks are exempt — the dive
+        // gesture owns that ending, not the cut.
+        if (!dropCutFired && render.mixset && !render.brake &&
+            (render.style == TransitionStyle.DJ_BLEND || render.style == TransitionStyle.DJ_FILTER) &&
+            render.overlapSeconds >= 16.0
+        ) {
+            val fireAt = render.bDropCutSec
+            if (fireAt != null) {
+                // B-deck clock, not wall math: the deck may ride a grid rate.
+                val bNow = player.currentPosition / 1000.0
+                if (progress >= 0.3f && progress <= 0.92f && bNow >= fireAt) {
+                    val vocalHot = (maskActivity(
+                        render.incomingVocalTimes,
+                        render.incomingVocalMask,
+                        fireAt,
+                        fireAt + 2.0,
+                    ) ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
+                    val baseEnergy = energyMean(
+                        render.incomingEnergyTimes,
+                        render.incomingEnergyValues,
+                        fireAt - 8.0,
+                        fireAt,
+                    ) ?: 0.0
+                    val dropEnergyNow = energyMean(
+                        render.incomingEnergyTimes,
+                        render.incomingEnergyValues,
+                        fireAt,
+                        fireAt + 2.0,
+                    ) ?: 0.0
+                    val dropHot = baseEnergy > 0.0 && dropEnergyNow >= baseEnergy * 1.3
+                    if (vocalHot || dropHot) {
+                        dropCutFired = true
+                        // A hold fighting a cut oscillates the gate: cut wins.
+                        reactHoldUntilMs = 0L
+                        reactCutNow = true
+                        TrackLog.d(TAG, "drop-cut style=${render.style} bNow=$bNow target=$fireAt")
+                    }
+                }
             }
         }
         val done = progress >= 1f ||
