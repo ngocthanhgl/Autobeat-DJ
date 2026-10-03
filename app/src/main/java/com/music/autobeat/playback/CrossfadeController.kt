@@ -593,6 +593,12 @@ class CrossfadeController(
     // fallGain (zero-slope landing), mirroring driveBail(). Rearmed in begin().
     private var muteRampStartMs = -1L
     private var muteFromGain = 1f
+    // B-volume hole ramp: armed in driveFade when A dies post-handoff with B
+    // still climbing. Holds gatedDone until the ramp lands. Rearmed in
+    // begin(), disarmed in bail() (bail voices its own ramps).
+    private var bRamping = false
+    private var bRampStartMs = 0L
+    private var bRampFromVol = 1f
     // Full-audit P2: rate-commit coalescing state (see driveFade). Rearmed
     // in begin() with every other per-transition flag.
     private var lastCommittedRate: Float? = null
@@ -2179,6 +2185,7 @@ class CrossfadeController(
         dryKilled = false
         muteRampStartMs = -1L
         muteFromGain = 1f
+        bRamping = false
         lastProgress = 0f
         lastCommittedRate = null
         lastRateCommitAt = 0L
@@ -2911,6 +2918,34 @@ class CrossfadeController(
         } else {
             configuredFadeMs() <= 0L
         }
+        // B-volume hole (DJ-only): an early handoff (rescue cue) parks the
+        // session on B while B is still at the foot of its curve; when A dies
+        // a tick later, done would fire with B at ~0.1 and finish() would
+        // jump it 0.1->1.0 — the dip-then-jump the log caught (lastProgress
+        // 0.065, 1.7 s of quiet B). Instead, while B is still climbing, hold
+        // done ~250 ms and ramp B to full first, so done lands with nothing
+        // left to snap. Stock keeps the immediate finish.
+        if (render.mixset && handedOff && !bRamping) {
+            val outDeadNow = out.playbackState == Player.STATE_ENDED ||
+                out.playbackState == Player.STATE_IDLE
+            val b = incoming
+            if (outDeadNow && b != null && b.volume < 0.99f) {
+                bRamping = true
+                bRampStartMs = SystemClock.elapsedRealtime()
+                bRampFromVol = b.volume
+            }
+        }
+        if (bRamping) {
+            val t = (SystemClock.elapsedRealtime() - bRampStartMs).toFloat() / B_RAMP_MS
+            val b = incoming
+            if (b == null || t >= 1f) {
+                if (b != null && t >= 1f) b.volume = 1f
+                bRamping = false
+            } else {
+                val s = t * t * (3f - 2f * t)
+                b.volume = (bRampFromVol + (1f - bRampFromVol) * s).coerceIn(0f, 1f)
+            }
+        }
         val done = progress >= 1f ||
             reactCutNow ||
             out.playbackState == Player.STATE_ENDED ||
@@ -2929,8 +2964,10 @@ class CrossfadeController(
         // gate exactly as it was.
         val outDead = out.playbackState == Player.STATE_ENDED ||
             out.playbackState == Player.STATE_IDLE
+        // A ramping B holds done until the ramp lands (or the deck leaves):
+        // outDead alone must not bypass a live ramp, or the jump returns.
         val gatedDone = done && muteSettled &&
-            (SystemClock.elapsedRealtime() >= reactHoldUntilMs || outDead || settingSwitchedOff)
+            (SystemClock.elapsedRealtime() >= reactHoldUntilMs || (outDead && !bRamping) || settingSwitchedOff)
         if (gatedDone) {
             // Early done (natural end, cap clamp, toggled off) lands finish()
             // at progress < 1, where its volume/tempo snaps are audible. A
@@ -3046,6 +3083,9 @@ class CrossfadeController(
         // the pipeline a second time at full volume for the same restore
         // (its guard reads lastProgress, frozen before this reset).
         deckRateReset = true
+        // A B-ramp in flight belongs to the abandoned fade: bail voices its
+        // own ramps, so disarm without completing.
+        bRamping = false
         bailStartedAt = SystemClock.elapsedRealtime()
         phase = Phase.BAILING
     }
@@ -4258,6 +4298,13 @@ class CrossfadeController(
          * order as the throw/reverb closes, inaudible as a move.
          */
         const val EQ_OPEN_MS = 150L
+
+        /**
+         * A dead-A post-handoff ramps B to full over this long before done
+         * fires — the dip-then-jump fix. Short enough to read as a rescue,
+         * long enough to land smooth.
+         */
+        const val B_RAMP_MS = 250L
 
         /**
          * A stranded tempo residual glides home over this long after the
