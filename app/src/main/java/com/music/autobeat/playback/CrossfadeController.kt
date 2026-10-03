@@ -2942,8 +2942,14 @@ class CrossfadeController(
             // subtle). The phase is set, never re-armed: the processor walks
             // its tap ring backwards continuously across the window, so every
             // tick just advances the same sweep instead of restarting it.
-            brakeDiveFilters.setBackspin(render.backspin)
-            if (render.backspin && outProgress >= windowStart) {
+            // DJ-literature in/out: the hand spins beats, never a vocal —
+            // a reverse sweep over singing reads as a mistake, not a move.
+            // liveSingA is the trailing 2 s vocal density, refreshed every
+            // tick in rideEq above. A sung spin window falls back to the
+            // forward brake dive (brake is armed on every backspin plan).
+            val spinning = render.backspin && liveSingA < 0.6f
+            brakeDiveFilters.setBackspin(spinning)
+            if (spinning && outProgress >= windowStart) {
                 val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
                 // Energy fix P1-2 still holds: real DJs keep the fader up
                 // through a spin-back, so no forward duck stacks onto the
@@ -2961,8 +2967,8 @@ class CrossfadeController(
                 val brakeT = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f))
                     .coerceIn(0f, 1f)
                 val speed = AppSettings.playbackSpeed.value
-                val dive = if (render.backspin) brakeT * brakeT * 1.05f else brakeT * brakeT
-                val floor = if (render.backspin) 0.02f else 0.10f
+                val dive = if (spinning) brakeT * brakeT * 1.05f else brakeT * brakeT
+                val floor = if (spinning) 0.02f else 0.10f
                 val brakeRate = (speed * (1f - dive * 0.97f)).coerceAtLeast(floor * speed)
                 val brakePitch = (brakeRate / speed.coerceAtLeast(1e-6f)).coerceIn(0.02f, 1f)
                 val last = lastBrakeRate
@@ -3718,7 +3724,16 @@ class CrossfadeController(
     private fun rideDjSend(progress: Float) {
         if (render.echoThrow && render.echoAmount > 0.0 && render.echoBeatSeconds > 0.0) {
             val attack = ((progress - 0.55f) / 0.15f).coerceIn(0f, 1f)
-            echoFilters.outgoing((render.echoAmount * attack).toFloat(), render.echoBeatSeconds.toFloat())
+            // DJ-literature landing: the dub tail must clear before the drop
+            // — decay the send into the cut on backspin plans so only the
+            // residual rings under B instead of a full wet tail. Blend throws
+            // keep the hold (their tail IS the transition).
+            val release = if (render.backspin) {
+                1f - ((progress - 0.85f) / 0.15f).coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            echoFilters.outgoing((render.echoAmount * attack * release).toFloat(), render.echoBeatSeconds.toFloat())
         }
         if (!render.echoThrow && render.reverbAmount > 0.0) {
             val bloom = (progress * 2f).coerceIn(0f, 1f)

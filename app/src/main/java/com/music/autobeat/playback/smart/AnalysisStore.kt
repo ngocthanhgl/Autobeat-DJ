@@ -310,7 +310,7 @@ class AnalysisStore(private val context: Context) {
          * re-analysis costs seconds, and a beat grid interpreted under the wrong
          * assumptions is silently wrong for the life of the file.
          */
-        const val SCHEMA_VERSION = 5
+        const val SCHEMA_VERSION = 6
 
         /** A few thousand tracks' worth, at tens of kilobytes each. */
         const val MAX_ENTRIES = 2_000

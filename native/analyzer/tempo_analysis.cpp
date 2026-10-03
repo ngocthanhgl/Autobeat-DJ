@@ -316,6 +316,64 @@ TempoResult AnalyzeTempo(
     best_lag = metrical_lag;
   }
 
+  // 8th-hat guard: full-band flux crowns double time when hats and shakers
+  // dominate the groove, and the metrical prior above is too weak to stop it
+  // (a mid-tempo ballad with driving 8ths reads near 200: measured, a ~102
+  // BPM track with gated snare and 8th hats came back above 200). Kicks do
+  // not live at 8th-note rate, so when the winner sits above 165 BPM the
+  // bass band gets a vote: if the doubled lag correlates clearly better
+  // down there, the winner is double time. Bounded to one octave like the
+  // vote above; the 165 floor keeps 140-line material (dubstep, half-time
+  // hip-hop) out of reach entirely.
+  //
+  // The bass vote alone cannot tell a double-read ballad from genuine fast
+  // material with kick-snare alternation (dnb at 174 alternates kick and
+  // snare, so its doubled lag also correlates well down low). The second
+  // vote is broadband parity at the winner's rate: a double-read ballad
+  // alternates full groove against bare hats (strong parity), while true
+  // fast material puts a snare on the off-beats (weak parity). Both votes
+  // must agree before the octave moves. Phase-free: parity takes the max
+  // over all beat phases, so no grid is assumed.
+  {
+    const double winner_bpm = frames_per_second * 60.0 / best_lag;
+    if (winner_bpm > 165.0) {
+      const int doubled = best_lag * 2;
+      if (doubled <= maximum_lag) {
+        const double low_now =
+          Correlation(envelopes.low, best_lag, search_limit);
+        const double low_doubled =
+          Correlation(envelopes.low, doubled, search_limit);
+        double parity = 1.0;
+        for (int offset = 0; offset < best_lag; ++offset) {
+          double first = 0;
+          double second = 0;
+          int first_count = 0;
+          int second_count = 0;
+          int beat = 0;
+          for (size_t i = static_cast<size_t>(offset); i < search_limit; i += best_lag) {
+            if (beat % 2 == 0) {
+              first += envelope[i];
+              ++first_count;
+            } else {
+              second += envelope[i];
+              ++second_count;
+            }
+            ++beat;
+          }
+          if (first_count > 0 && second_count > 0) {
+            const double ratio =
+              std::max(first * second_count, second * first_count) /
+              std::max(1e-12, std::min(first * second_count, second * first_count));
+            parity = std::max(parity, ratio);
+          }
+        }
+        if (low_doubled > low_now * 1.3 && low_doubled > 0.2 && parity > 1.5) {
+          best_lag = doubled;
+        }
+      }
+    }
+  }
+
   double refined_lag = best_lag;
   if (best_lag > minimum_lag && best_lag < maximum_lag) {
     // Refined against raw correlation rather than `scores`, because the octave

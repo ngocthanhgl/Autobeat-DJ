@@ -1,6 +1,7 @@
 package com.music.autobeat.playback.smart
 
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -100,7 +101,22 @@ fun humanizePlan(
     // re-grabbed stutter.
     if (plan.backspin) {
         if (draws.spinGrabs <= 1) return plan to null
-        return plan.copy(spinGrabs = draws.spinGrabs) to "seed=${st.mixes} grabs=${draws.spinGrabs}"
+        // Literature juggle: the re-grabbed stutter is a battle move, not
+        // seasoning — gate it like one. No vocal under the hand in the spin
+        // window (a scratch over singing is heckling), and the flicks land
+        // on beats: grabs quantized to every 2nd outgoing beat across the
+        // spin window, CDJ loop-roll style. A juggle is a big moment, so it
+        // buys a longer silence after itself than a plain wildcard.
+        val spinStart = plan.transitionEnd - plan.spinSeconds
+        val sung = out?.let { vocalActivityBetween(it, spinStart, plan.transitionEnd) } ?: 0.0
+        if (sung >= 0.3) return plan to null
+        val grabs = if (outBeatSec != null && outBeatSec > 0 && plan.spinSeconds > 0) {
+            (plan.spinSeconds / (2 * outBeatSec)).roundToInt().coerceIn(2, 3)
+        } else {
+            draws.spinGrabs
+        }
+        st.wildcardCooldown = maxOf(st.wildcardCooldown, 4)
+        return plan.copy(spinGrabs = grabs) to "seed=${st.mixes} grabs=$grabs juggle"
     }
 
     var humanized = plan
