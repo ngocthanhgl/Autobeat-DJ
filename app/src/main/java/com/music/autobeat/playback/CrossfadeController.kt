@@ -675,6 +675,13 @@ class CrossfadeController(
     // Rearmed in begin() with every other per-transition flag.
     private var liveDuckA = 0f
     private var liveDelayB = 0f
+    // DJ-literature ownership: continuous per-deck vocal density (raw 2 s
+    // mask means, 0..1, no threshold) for the proportional mid carve — the
+    // binary live flags above only know "singing / not", this knows "how
+    // much". Written in updateLiveVocalFlags, read in rideEq. Rearmed in
+    // begin() with every other per-transition flag.
+    private var liveSingA = 0f
+    private var liveSingB = 0f
     private var lastVocalSlewAt = 0L
     private var liveVocalLogged = false
     // DJ booth rule: the mid trade is committed per phrase and ridden
@@ -738,14 +745,16 @@ class CrossfadeController(
         // A deck's blend portion ends at the fade end; B deck's starts at cue.
         val aNow = fadeEndMs / 1000.0 - (1.0 - outProgress) * overlap
         val bNow = incomingCueTimeMs / 1000.0 + inProgress * overlap
-        val aTarget =
-            if ((maskActivity(render.outgoingVocalTimes, render.outgoingVocalMask, aNow - 2.0, aNow)
-                    ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
-            ) 1f else 0f
-        val bTarget =
-            if ((maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow - 2.0, bNow)
-                    ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
-            ) 1f else 0f
+        val aMean = maskActivity(render.outgoingVocalTimes, render.outgoingVocalMask, aNow - 2.0, aNow)
+            ?: 0.0
+        val bMean = maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow - 2.0, bNow)
+            ?: 0.0
+        // Continuous density for the proportional carve (no evidence reads
+        // 0.0 — silence, never a block, same contract as maskActivity).
+        liveSingA = aMean.toFloat().coerceIn(0f, 1f)
+        liveSingB = bMean.toFloat().coerceIn(0f, 1f)
+        val aTarget = if (aMean >= VOCAL_ACTIVE_THRESHOLD) 1f else 0f
+        val bTarget = if (bMean >= VOCAL_ACTIVE_THRESHOLD) 1f else 0f
         liveDuckA += (aTarget - liveDuckA) * dt
         liveDelayB += (bTarget - liveDelayB) * dt
         // Engage-latch: crossing 0.5 upward sticks for this fade. A vocal
@@ -2286,6 +2295,8 @@ class CrossfadeController(
         spanLatched = 0L
         liveDuckA = 0f
         liveDelayB = 0f
+        liveSingA = 0f
+        liveSingB = 0f
         lastVocalSlewAt = 0L
         liveVocalLogged = false
         liveDuckLatchedA = false
@@ -3488,9 +3499,11 @@ class CrossfadeController(
         // the compressed short-bed tables — the long-bed keyframes never
         // leave unity inside a phrase-switch bed.
         val shortBed = render.overlapSeconds in 0.01..EqSchedule.SHORT_BED_SECONDS
-        // Real-DJ long blend: 16s+ beds voice the spread long tables so the
+        // Real-DJ long blend: 12s+ beds voice the spread long tables so the
         // 12-20s gap (LONG_BED 20) no longer falls to the default unity hold.
-        val longBed = render.overlapSeconds >= 16.0
+        // DJ-literature ownership applies from 12 s: a 12-16 s bed is still
+        // 6-8 bars of overlap, room enough for staged band handoffs.
+        val longBed = render.overlapSeconds >= 12.0
         // Full-audit P1 M3: the vocal choke voices duck keys with the log
         // curve even when the ARM flags read clean.
         // Full-audit P2 S1: OR in the live recompute — the ARM flags only
@@ -3586,11 +3599,44 @@ class CrossfadeController(
         val entryFloor = if (hardDuel) 0.15f else 0.40f
         val entryRamp = (entryFloor + (1f - entryFloor) * (entryT * entryT * (3f - 2f * entryT)))
             .coerceIn(entryFloor, 1f)
+        // DJ-literature key rule: long blends expose tonal conflict more
+        // than quick cuts, so a low keyScore widens every carve below.
+        // keyScore is discrete (1.0 / 0.85 / 0.75 / 0.45 / 0.0, 0.0 also
+        // when unparseable) — below 0.5 reads clash-prone-or-unknown, and
+        // unknown is carved carefully, never ignored.
+        val keyClash = render.keyScore < 0.5
+        // Proportional carve depth: the outgoing band yields in proportion
+        // to the incoming deck's LIVE vocal density (DJ preempts the clash
+        // instead of reacting to it). Compatible keys need less carve;
+        // hardDuel's cubic already kills, the proportional term just hurries
+        // it. Zero without the vocal gate — silent beds stay untouched.
+        val carveK = when {
+            !vocalGate -> 0f
+            hardDuel -> 0.35f
+            keyClash -> 0.7f
+            render.keyScore >= 0.75 -> 0.35f
+            else -> 0.5f
+        }
+        // Sparkle owner: the hotter deck earns the highs first (DJ lets the
+        // fresh/hotter track announce with hats and air). Blend-wide energy
+        // means; missing evidence keeps the default tame entry.
+        val aEng = energyMean(render.outgoingEnergyTimes, render.outgoingEnergyValues)
+        val bEng = energyMean(render.incomingEnergyTimes, render.incomingEnergyValues)
+        val bHot = bEng != null && aEng != null && aEng > 0.0 && bEng > aEng * 1.15
+        val highSpan = if (bHot && longBed) entrySpan * 0.6f else entrySpan
+        val highT = (progress / highSpan).coerceIn(0f, 1f)
+        val highRamp = (entryFloor + (1f - entryFloor) * (highT * highT * (3f - 2f * highT)))
+            .coerceIn(entryFloor, 1f)
         // Booth highs-first entry aims: declared before the dry-kill branch
         // because the shared tail below voices them on both paths.
         // Long blend warmth: tame the shimmer mid-blend so body, not air, dominates.
-        val highIn = if (longBed) into.high * (0.70f + 0.30f * entryRamp) else into.high
+        val highIn = if (longBed) into.high * (0.70f + 0.30f * highRamp) else into.high
         val inMid = into.mid * entryRamp
+        // B defers to A's live voice while A still structurally owns the
+        // band (ownership ~1 pre-swap, ~0 after) — the new vocal waits its
+        // turn instead of doubling the lead. Voiced at the tail, where the
+        // ownership value exists; 1.0 on the dry-killed path.
+        var bDefer = 1f
         if (dryKilled) {
             eqFilters.outgoing(0f, 0f, 0f)
         } else {
@@ -3639,18 +3685,26 @@ class CrossfadeController(
             // headroom is untouched; short blends bypass outright. HARD_DUEL
             // nearly empties A's band as B's arrives (0.85/0.70): one vocal
             // owns the mids at any instant.
-            val sumMid = if (hardDuel) 0.85f else 0.5f
-            val sumHigh = if (hardDuel) 0.70f else 0.4f
-            val outMid = (out.mid * ownership) *
+            val sumMid = if (hardDuel) 0.85f else if (keyClash && vocalGate) 0.65f else 0.5f
+            val sumHigh = if (hardDuel) 0.70f else if (keyClash && vocalGate) 0.55f else 0.4f
+            // Proportional terms: A yields exactly where B sings (bSing),
+            // highs give extra room on clashing keys. Cut-only, never boost.
+            val bSing = liveSingB.coerceIn(0f, 1f)
+            val propMid = 1f - carveK * bSing
+            val propHigh = 1f - (carveK + if (keyClash) 0.15f else 0f).coerceAtMost(0.9f) * bSing
+            val outMid = (out.mid * ownership * propMid) *
                 (if (longBed && vocalGate) 1f - sumMid * inMid.coerceIn(0f, 1f) else 1f)
-            val outHigh = (out.high * ownership) *
+            val outHigh = (out.high * ownership * propHigh) *
                 (if (longBed && vocalGate) 1f - sumHigh * highIn.coerceIn(0f, 1f) else 1f)
+            // B's defer lives here because only this path knows ownership.
+            bDefer = 1f - 0.5f * liveSingA.coerceIn(0f, 1f) * ownership.coerceIn(0f, 1f)
             eqFilters.outgoing(lowOut, outMid, outHigh)
         }
+        val inMidFinal = inMid * (if (vocalGate) bDefer else 1f)
         lastInLow = lowIn
-        lastInMid = inMid
+        lastInMid = inMidFinal
         lastInHigh = highIn
-        eqFilters.incoming(lowIn, inMid, highIn)
+        eqFilters.incoming(lowIn, inMidFinal, highIn)
     }
 
     /**
