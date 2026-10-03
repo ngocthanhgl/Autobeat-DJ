@@ -110,24 +110,22 @@ private fun dropCutFireAt(
     overlapSec: Double,
 ): Double? {
     if (next == null || overlapSec < 16.0) return null
-    var target = if (isDropTrusted(next)) firstDropSec(next) else null
-    if (target == null || !target.isFinite()) {
-        target = firstVocalStartSec(next, cueSec, cueSec + overlapSec)
-    }
-    if (target == null || !target.isFinite()) return null
-    if (target < cueSec + 0.3 * overlapSec || target > cueSec + 0.92 * overlapSec) return null
-    // Frozen val: target is a var, and smart-cast does not survive into the
-    // minByOrNull lambda below.
-    val dropAt = target
-    val beatSec = next.beatInterval.takeIf { it > 0 }
+    // Vals only with explicit non-null types: a nullable var's smart-cast
+    // does not survive into the minByOrNull lambda below (CI-proven twice).
+    val scored: Double? = if (isDropTrusted(next)) firstDropSec(next) else null
+    val dropAt: Double = (if (scored != null && scored.isFinite()) scored
+        else firstVocalStartSec(next, cueSec, cueSec + overlapSec))
+        ?.takeIf { it.isFinite() } ?: return null
+    if (dropAt < cueSec + 0.3 * overlapSec || dropAt > cueSec + 0.92 * overlapSec) return null
+    val beatSec: Double = next.beatInterval.takeIf { it > 0 }
         ?: next.bpm.takeIf { it > 0 }?.let { 60.0 / it } ?: 0.0
-    var fireAt = dropAt
+    var fireAt: Double = dropAt
     if (beatSec > 0 && next.downbeats.isNotEmpty()) {
         next.downbeats.minByOrNull { abs(it - dropAt) }?.let { snap ->
             if (abs(snap - dropAt) <= 2 * beatSec) fireAt = snap
         }
     }
-    val lead = if (beatSec > 0) beatSec.coerceIn(0.25, 1.0) else 0.5
+    val lead: Double = if (beatSec > 0) beatSec.coerceIn(0.25, 1.0) else 0.5
     return (fireAt - lead).coerceAtLeast(cueSec)
 }
 
