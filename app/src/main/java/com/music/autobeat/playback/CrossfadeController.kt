@@ -116,12 +116,15 @@ private fun dropCutFireAt(
     }
     if (target == null || !target.isFinite()) return null
     if (target < cueSec + 0.3 * overlapSec || target > cueSec + 0.92 * overlapSec) return null
+    // Frozen val: target is a var, and smart-cast does not survive into the
+    // minByOrNull lambda below.
+    val dropAt = target
     val beatSec = next.beatInterval.takeIf { it > 0 }
         ?: next.bpm.takeIf { it > 0 }?.let { 60.0 / it } ?: 0.0
-    var fireAt = target
+    var fireAt = dropAt
     if (beatSec > 0 && next.downbeats.isNotEmpty()) {
-        next.downbeats.minByOrNull { abs(it - target) }?.let { snap ->
-            if (abs(snap - target) <= 2 * beatSec) fireAt = snap
+        next.downbeats.minByOrNull { abs(it - dropAt) }?.let { snap ->
+            if (abs(snap - dropAt) <= 2 * beatSec) fireAt = snap
         }
     }
     val lead = if (beatSec > 0) beatSec.coerceIn(0.25, 1.0) else 0.5
