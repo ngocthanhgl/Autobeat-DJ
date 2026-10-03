@@ -3469,11 +3469,21 @@ class CrossfadeController(
         // instead of arriving full (DJ brings the new track in by layers).
         // delay already folds forceDuckKeys + liveDelayB; don't double-count.
         val incomingSings = delay
+        // HARD_DUEL: both choruses firing on a 16 s+ bed (vocalOverlap>0.4,
+        // not trace) — the complementary carve below is not enough, so the
+        // old vocal gets killed early and hard while the new one enters
+        // thinned. DJ-only by construction (rideEq never runs for stock).
+        val hardDuel = render.mixRecipe == MixRecipe.VOCAL_DUEL &&
+            longBed && render.vocalOverlap > 0.4
         // Real-DJ long blend: keep warmth — B layers in over 0.35 bed
         // per minimal 10% steps, not 0.50, so body arrives before mid hole.
-        val entrySpan = if (longBed) 0.35f else 0.30f
+        // HARD_DUEL stretches the layering (0.50) from a near-closed door
+        // (0.15): the new vocal earns the band instead of arriving in it.
+        val entrySpan = if (hardDuel) 0.50f else if (longBed) 0.35f else 0.30f
         val entryT = (progress / entrySpan).coerceIn(0f, 1f)
-        val entryRamp = (0.40f + 0.60f * (entryT * entryT * (3f - 2f * entryT))).coerceIn(0.40f, 1f)
+        val entryFloor = if (hardDuel) 0.15f else 0.40f
+        val entryRamp = (entryFloor + (1f - entryFloor) * (entryT * entryT * (3f - 2f * entryT)))
+            .coerceIn(entryFloor, 1f)
         // Booth highs-first entry aims: declared before the dry-kill branch
         // because the shared tail below voices them on both paths.
         // Long blend warmth: tame the shimmer mid-blend so body, not air, dominates.
@@ -3489,7 +3499,13 @@ class CrossfadeController(
             // vocalGate now drives ownership, not just INSTRUMENTAL_BED —
             // trace 0.12-0.20 collisions were holding old mids at 1.0 through
             // mid-blend because recipe was INSTRUMENTAL_BED but gate false.
-            val ownership = if (
+            val ownership = if (hardDuel && incomingSings) {
+                // Both choruses firing: cubic yield to zero by 55% — the old
+                // vocal is a background by mid-blend, not a co-lead. WASH_OUT
+                // is excluded (its wet tail still needs the band to ring).
+                val lin = ((0.55f - outProgress) / 0.55f).coerceIn(0f, 1f)
+                lin * lin * lin
+            } else if (
                 (render.mixRecipe == MixRecipe.VOCAL_DUEL || render.mixRecipe == MixRecipe.WASH_OUT) &&
                 incomingSings
             ) {
@@ -3518,11 +3534,15 @@ class CrossfadeController(
             // the outgoing band recedes in proportion to the incoming band's
             // arrival (A yields exactly where B fills; where B is silent A
             // plays the tables untouched). Cut-only, never a boost, so
-            // headroom is untouched; short blends bypass outright.
+            // headroom is untouched; short blends bypass outright. HARD_DUEL
+            // nearly empties A's band as B's arrives (0.85/0.70): one vocal
+            // owns the mids at any instant.
+            val sumMid = if (hardDuel) 0.85f else 0.5f
+            val sumHigh = if (hardDuel) 0.70f else 0.4f
             val outMid = (out.mid * ownership) *
-                (if (longBed && vocalGate) 1f - 0.5f * inMid.coerceIn(0f, 1f) else 1f)
+                (if (longBed && vocalGate) 1f - sumMid * inMid.coerceIn(0f, 1f) else 1f)
             val outHigh = (out.high * ownership) *
-                (if (longBed && vocalGate) 1f - 0.4f * highIn.coerceIn(0f, 1f) else 1f)
+                (if (longBed && vocalGate) 1f - sumHigh * highIn.coerceIn(0f, 1f) else 1f)
             eqFilters.outgoing(lowOut, outMid, outHigh)
         }
         lastInLow = lowIn
@@ -3994,13 +4014,17 @@ class CrossfadeController(
      */
     private fun rideVocalSeparation(progress: Float) {
         val amount = render.vocalOverlap.coerceIn(0.0, 1.0)
+        // HARD_DUEL shares rideEq's gate (both choruses, 16 s+ bed): the
+        // filter goes with the EQ — deeper floor, higher entry corner.
+        val hardDuel = render.mixset && render.mixRecipe == MixRecipe.VOCAL_DUEL &&
+            render.overlapSeconds >= 16.0 && render.vocalOverlap > 0.4
         // Long-blend floor: analyzer masks under-report on dense masters, so
         // a "voiceless" 16 s+ bed still stacks two full-range decks through
         // the middle third. A 0.25 floor keeps gentle complementary filtering
         // on every long bed (out LP ~7 kHz end, in HP lifted) while a measured
         // collision still scales past it. Short blends bypass outright.
         val effAmount = if (render.mixset && render.overlapSeconds >= 16.0) {
-            max(amount, 0.25)
+            max(amount, if (hardDuel) 0.5 else 0.25)
         } else {
             amount
         }
@@ -4021,7 +4045,12 @@ class CrossfadeController(
         )
         filters.incoming(
             TransitionFilterProcessor.OPEN_HZ,
-            entryHighPass(progress, effAmount, VOCAL_SEPARATION_HIGH_PASS_HZ, ENTRY_OPEN_BY),
+            entryHighPass(
+                progress,
+                effAmount,
+                if (hardDuel) HARD_DUEL_ENTRY_HP_HZ else VOCAL_SEPARATION_HIGH_PASS_HZ,
+                ENTRY_OPEN_BY,
+            ),
         )
     }
 
@@ -4549,6 +4578,13 @@ class CrossfadeController(
          * clear step below that one leaves the two ranked the way their tiers are.
          */
         const val VOCAL_SEPARATION_HIGH_PASS_HZ = 700.0
+
+        /**
+         * HARD_DUEL entry corner: both choruses firing, so the incoming vocal
+         * enters with body fully lifted (presence only) until the outgoing
+         * vocal is killed. DJ-only, used only inside the hard-duel branch.
+         */
+        const val HARD_DUEL_ENTRY_HP_HZ = 1200.0
 
         /**
          * [ENTRY_HIGH_PASS_HZ]'s counterpart for a beat-matched blend: lower, and
