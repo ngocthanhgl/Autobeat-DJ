@@ -296,12 +296,6 @@ private fun RecentShelf(
 }
 
 /** Big card: artwork with the caption laid over a scrim, as on Listen Now. */
-                }
-            }
-        }
-    }
-}
-
 @Composable
 private fun RecentSectionHeader(
     title: String,

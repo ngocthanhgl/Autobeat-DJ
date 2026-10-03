@@ -447,7 +447,7 @@ private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean,
                 null -> 3
             }
         }.distinctUntilChanged()
-    }.collectAsStateWithLifecycle(initial = 3)
+    }.collectAsStateWithLifecycle(initialValue = 3)
 
     // The record is a claim about a folder the user manages themselves, so it
     // is checked against the disk rather than trusted — re-checked whenever the
@@ -511,7 +511,7 @@ private fun DownloadRunningRow(videoId: String, palette: ArtworkPalette) {
         Downloads.active.map { states ->
             (states[videoId] as? DownloadState.Running)?.fraction?.let { (it * 20).toInt() }
         }.distinctUntilChanged()
-    }.collectAsStateWithLifecycle(initial = null)
+    }.collectAsStateWithLifecycle(initialValue = null)
     ActionRow(
         icon = Icons.Rounded.Downloading,
         label = stringResource(R.string.download_notification_title),
@@ -530,7 +530,7 @@ private fun DownloadFailedRow(song: Song, palette: ArtworkPalette, onDownload: (
         Downloads.active.map { states ->
             (states[song.videoId] as? DownloadState.Failed)?.reason
         }.distinctUntilChanged()
-    }.collectAsStateWithLifecycle(initial = null)
+    }.collectAsStateWithLifecycle(initialValue = null)
     ActionRow(
         icon = Icons.Rounded.ErrorOutline,
         label = reason ?: "",
