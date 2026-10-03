@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,8 +14,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.onSizeChanged
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +27,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +39,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -57,6 +65,16 @@ private val SubtitleWidths = listOf(0.34f, 0.44f, 0.27f, 0.38f, 0.31f)
  * screenful of these would otherwise recompose on every animation frame, and
  * all any of them needs per frame is a fresh gradient.
  */
+/**
+ * One placeholder block, with a highlight sweeping across it.
+ *
+ * The sweep rides a graphics layer, not a redraw: the gradient is drawn once
+ * into a strip three box-widths wide (cached — nothing in the draw block
+ * reads animation state), and the strip slides under the clipped box. The
+ * per-frame work is one layer translation per box instead of a gradient
+ * rebuild, and no frame ever recomposes. A screenful of these used to mint
+ * a gradient per box per frame.
+ */
 @Composable
 fun ShimmerBox(modifier: Modifier = Modifier, shape: Shape = BlockShape) {
     val base = MaterialTheme.colorScheme.surfaceVariant
@@ -69,23 +87,43 @@ fun ShimmerBox(modifier: Modifier = Modifier, shape: Shape = BlockShape) {
         animationSpec = infiniteRepeatable(tween(SHIMMER_PERIOD_MS, easing = LinearEasing)),
         label = "sweep",
     )
+    var widthPx by remember { mutableFloatStateOf(0f) }
     Box(
         modifier
             .clip(shape)
-            .drawWithCache {
-                // The band travels from fully off one edge to fully off the
-                // other, which leaves a beat of flat grey between passes rather
-                // than a highlight permanently parked somewhere on the block.
-                val band = size.width * 0.5f
-                val startX = -band + sweep.value * (size.width + band * 2)
-                val brush = Brush.horizontalGradient(
-                    colors = listOf(base, highlight, base),
-                    startX = startX,
-                    endX = startX + band,
-                )
-                onDrawBehind { drawRect(brush) }
-            },
-    )
+            .background(base)
+            .onSizeChanged { widthPx = it.width.toFloat() },
+    ) {
+        // Three widths wide so the band travels fully off each edge, leaving
+        // the same beat of flat grey between passes the old redraw had.
+        val stripWidth = with(LocalDensity.current) { (widthPx * 3f).toDp() }
+        Box(
+            Modifier
+                .width(stripWidth)
+                .fillMaxHeight()
+                .graphicsLayer {
+                    // State reads inside the layer block redraw the layer
+                    // without recomposing: +w parked off the left, -w off the
+                    // right, band centred mid-sweep.
+                    translationX = widthPx * (1f - 2f * sweep.value)
+                }
+                .drawWithCache {
+                    val w = size.width
+                    val brush = Brush.horizontalGradient(
+                        colorStops = arrayOf(
+                            0f to base,
+                            0.38f to base,
+                            0.5f to highlight,
+                            0.62f to base,
+                            1f to base,
+                        ),
+                        startX = 0f,
+                        endX = w,
+                    )
+                    onDrawBehind { drawRect(brush) }
+                },
+        )
+    }
 }
 
 /** A placeholder for one line of text, sized as a fraction of its parent. */

@@ -37,6 +37,8 @@ import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
+import com.music.autobeat.data.model.PLAYER_ART_PX
+import com.music.autobeat.data.model.artworkAt
 import com.music.autobeat.data.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -222,8 +224,11 @@ fun rememberArtworkColors(imageUrl: String?, canvasFrame: Bitmap? = null): MeshP
 
     LaunchedEffect(imageUrl) {
         if (imageUrl == null) return@LaunchedEffect
+        // Same rendition the sleeve shows: the raw advertised URL is often a
+        // tiny thumb, and quantising that disagrees with the on-screen cover.
+        // Runging to player size shares the sleeve's disk entry.
         val request = ImageRequest.Builder(context)
-            .data(imageUrl)
+            .data(imageUrl.artworkAt(PLAYER_ART_PX))
             .size(128) // palette quality is fine at thumbnail size, and it's fast
             .allowHardware(false) // Palette needs pixel access
             .build()

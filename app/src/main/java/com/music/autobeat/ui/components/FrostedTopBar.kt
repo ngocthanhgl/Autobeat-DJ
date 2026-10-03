@@ -99,22 +99,6 @@ val TopBarContentHeight = 52.dp
 val TopBarContentGap = 12.dp
 
 /**
- * How much of each end of the bar is spoken for, so a long title truncates
- * instead of running under what sits there.
- *
- * Only ever consumed through the larger of the two ΓÇö see the title's padding.
- * They are kept apart rather than collapsed into one number because they
- * describe two different things, and the wordmark is the one that changes when
- * the logo or the Dev badge does.
- */
-private val BackInset = 54.dp
-private val WordmarkInset = 96.dp
-private val ActionsInset = 56.dp
-
-/** What the leading end of the bar needs: a back button, or the wordmark. */
-private fun leadingInset(hasBack: Boolean): Dp = if (hasBack) BackInset else WordmarkInset
-
-/**
  * Whether the account button is being drawn inside the floating actions pill.
  *
  * The pill is already a glass circle of its own, so the button sitting in it
@@ -183,11 +167,6 @@ fun FrostedTopBar(
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val useFloatingChrome = artworkPageChrome ||
         (LocalLiquidGlassEnabled.current && isGlassSupported())
-    val titleAlpha by animateFloatAsState(
-        targetValue = if (scrolled || trailingTitle != null) 1f else 0f,
-        animationSpec = tween(220),
-        label = "topBarTitleAlpha",
-    )
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -203,74 +182,8 @@ fun FrostedTopBar(
                 .statusBarsPadding()
                 .height(TopBarContentHeight),
         ) {
-            /* Temporarily hidden: keep the scrolling center-title implementation
-             * intact so it can be restored without rebuilding its transitions.
-             *
-            // Artwork pages keep their large in-page heading and never create a
-            // duplicate title in the status bar, including in accessibility.
-            if (!artworkPageChrome) {
-                AnimatedContent(
-                    targetState = trailingTitle,
-                    transitionSpec = {
-                        (fadeIn(animationSpec = tween(260)) + slideInHorizontally(animationSpec = tween(260)) { it / 3 }) togetherWith
-                            (fadeOut(animationSpec = tween(200)) + slideOutHorizontally(animationSpec = tween(200)) { -it / 3 })
-                    },
-                    label = "topBarTitleAnimation",
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        // Reserve room for whatever flanks the title ΓÇö and reserve
-                        // the *same* room on both sides. Equal is the whole point:
-                        // the title is centered within this padded box, so an inset
-                        // that differs end to end moves it off the bar's centre by
-                        // half that difference. Reserving what each side actually
-                        // needs (96dp for the wordmark, 56dp for the actions) put
-                        // every root tab's title 20dp right of centre, which is
-                        // visible against a status bar clock that is not.
-                        .padding(horizontal = max(leadingInset(onBack != null), ActionsInset))
-                        .fillMaxWidth()
-                        .graphicsLayer { alpha = titleAlpha },
-                ) { trailing ->
-                    if (trailing != null) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = trailing,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.End,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                        }
-                    } else {
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            }
-             */
+            // The scrolling center title lives here when restored; the bar
+            // currently shows no title of its own (pages own their headers).
             // On a pushed page the back affordance is always visible, since
             // there is no large in-list header to fall back on.
             if (onBack != null) {

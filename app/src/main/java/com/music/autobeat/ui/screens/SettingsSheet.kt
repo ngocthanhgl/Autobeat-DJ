@@ -82,6 +82,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -128,6 +129,7 @@ import com.music.autobeat.ui.components.languageDisplayNameRes
 import com.music.autobeat.ui.components.MessageState
 import com.music.autobeat.ui.components.SearchField
 import com.music.autobeat.ui.components.thumbnailBorder
+import com.music.autobeat.ui.utils.guardSheetFromContentTouches
 import com.music.autobeat.ui.icons.AutobeatIcons
 import com.music.autobeat.ui.performance.resolvePerformanceRefreshRate
 import com.music.autobeat.ui.performance.supportedPerformanceRefreshRates
@@ -1148,10 +1150,13 @@ fun SettingsScreen(
     }
 
     picking?.let { target ->
+        val qualitySheetState = rememberModalBottomSheetState()
         ModalBottomSheet(
             onDismissRequest = { picking = null },
+            sheetState = qualitySheetState,
             containerColor = MaterialTheme.colorScheme.background,
         ) {
+            Box(Modifier.guardSheetFromContentTouches(qualitySheetState)) {
             QualitySheet(
                 target = target,
                 selected = when (target) {
@@ -1174,14 +1179,18 @@ fun SettingsScreen(
                     picking = null
                 },
             )
+            }
         }
     }
 
     if (pickingDownloadQuality) {
+        val downloadQualitySheetState = rememberModalBottomSheetState()
         ModalBottomSheet(
             onDismissRequest = { pickingDownloadQuality = false },
+            sheetState = downloadQualitySheetState,
             containerColor = MaterialTheme.colorScheme.background,
         ) {
+            Box(Modifier.guardSheetFromContentTouches(downloadQualitySheetState)) {
             DownloadQualitySheet(
                 selected = downloadQuality,
                 onSelect = { quality ->
@@ -1189,14 +1198,18 @@ fun SettingsScreen(
                     pickingDownloadQuality = false
                 },
             )
+            }
         }
     }
 
     if (pickingAutomixPerformance) {
+        val automixSheetState = rememberModalBottomSheetState()
         ModalBottomSheet(
             onDismissRequest = { pickingAutomixPerformance = false },
+            sheetState = automixSheetState,
             containerColor = MaterialTheme.colorScheme.background,
         ) {
+            Box(Modifier.guardSheetFromContentTouches(automixSheetState)) {
             AutomixPerformanceSheet(
                 selected = automixPerformance,
                 onSelect = { mode ->
@@ -1204,6 +1217,7 @@ fun SettingsScreen(
                     pickingAutomixPerformance = false
                 },
             )
+            }
         }
     }
 

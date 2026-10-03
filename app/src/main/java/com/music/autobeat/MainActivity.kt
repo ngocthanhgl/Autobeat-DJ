@@ -3015,13 +3015,16 @@ private fun AutobeatApp(
             // carries the per-entry id a removal is expressed in.
             val editable = viewModel.editablePlaylist(detail?.browseId)
                 ?.takeIf { !fromPlayer && song.setVideoId != null }
+            val songSheetState = rememberModalBottomSheetState()
             ModalBottomSheet(
                 onDismissRequest = { songActions = null },
+                sheetState = songSheetState,
                 // The sheet paints itself in the track's own colours, corners
                 // and drag handle included — see SongActionsSheet.
                 containerColor = Color.Transparent,
                 dragHandle = null,
             ) {
+                Box(Modifier.guardSheetFromContentTouches(songSheetState)) {
                 SongActionsSheet(
                     song = song,
                     signedIn = signedIn,
@@ -3191,6 +3194,7 @@ private fun AutobeatApp(
                         null
                     },
                 )
+                }
             }
         }
 
@@ -3205,11 +3209,15 @@ private fun AutobeatApp(
                 DownloadSession.markSeen()
             }
             BackHandler(onBack = closeDownloadManager)
+            val downloadSheetState = rememberModalBottomSheetState()
             ModalBottomSheet(
                 onDismissRequest = closeDownloadManager,
+                sheetState = downloadSheetState,
                 containerColor = MaterialTheme.colorScheme.background,
             ) {
-                DownloadManagerSheet(onDismiss = closeDownloadManager)
+                Box(Modifier.guardSheetFromContentTouches(downloadSheetState)) {
+                    DownloadManagerSheet(onDismiss = closeDownloadManager)
+                }
             }
         }
 
@@ -3223,10 +3231,13 @@ private fun AutobeatApp(
                 playlistTarget = null
                 creatingPlaylist = false
             }
+            val playlistSheetState = rememberModalBottomSheetState()
             ModalBottomSheet(
                 onDismissRequest = dismiss,
+                sheetState = playlistSheetState,
                 containerColor = MaterialTheme.colorScheme.background,
             ) {
+                Box(Modifier.guardSheetFromContentTouches(playlistSheetState)) {
                 PlaylistPickerSheet(
                     playlists = playlists,
                     loading = playlistsLoading,
@@ -3241,6 +3252,7 @@ private fun AutobeatApp(
                         dismiss()
                     },
                 )
+                }
             }
         }
 
@@ -3283,10 +3295,13 @@ private fun AutobeatApp(
             val remote = target.browseId?.startsWith("local:") == false
             val pinnedPlaylists by AppSettings.pinnedPlaylists.collectAsStateWithLifecycle()
             val pinnableId = target.browseId?.takeIf { target.type == BrowseType.PLAYLIST }
+            val browseSheetState = rememberModalBottomSheetState()
             ModalBottomSheet(
                 onDismissRequest = { browseActions = null },
+                sheetState = browseSheetState,
                 containerColor = MaterialTheme.colorScheme.background,
             ) {
+                Box(Modifier.guardSheetFromContentTouches(browseSheetState)) {
                 BrowseActionsSheet(
                     // The live answer, not the one the target was built with.
                     target = target.copy(playlist = playlist),
@@ -3396,6 +3411,7 @@ private fun AutobeatApp(
                         }
                     },
                 )
+                }
             }
         }
 

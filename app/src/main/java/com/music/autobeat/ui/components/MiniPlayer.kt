@@ -170,7 +170,7 @@ fun MiniPlayer(
     // height if the row's contents ever change it — which is what keeps a pill
     // a pill instead of a rounded rectangle. Same idiom as [FloatingBottomBar]
     // directly below it, so the two shapes are the same family.
-    val shape = RoundedCornerShape(percent = 50)
+    val shape = remember { RoundedCornerShape(percent = 50) }
     Box(
         modifier = modifier
             .padding(horizontal = PAGE_GUTTER)

@@ -255,7 +255,10 @@ private fun RecentShelf(
                     contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(shelf.items.chunked(RECENT_TRACKS_PER_COLUMN)) { column ->
+                    items(
+                        shelf.items.chunked(RECENT_TRACKS_PER_COLUMN),
+                        key = { column -> column.joinToString("|") { it.browseId ?: it.videoId ?: it.title } },
+                    ) { column ->
                         Column(Modifier.width(columnWidth)) {
                             column.forEach { item ->
                                 RecentTrackRow(
@@ -275,7 +278,10 @@ private fun RecentShelf(
                     contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    items(shelf.items) { item ->
+                    items(
+                        shelf.items,
+                        key = { it.browseId ?: it.videoId ?: it.title },
+                    ) { item ->
                         HeroCard(
                             item = item,
                             onClick = { onItemClick(item) },
@@ -283,6 +289,13 @@ private fun RecentShelf(
                             modifier = Modifier.width(cardWidth),
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+/** Big card: artwork with the caption laid over a scrim, as on Listen Now. */
                 }
             }
         }
@@ -644,14 +657,17 @@ private fun HeroShelf(
                 contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                items(shelf.items) { item ->
-                    HeroCard(
-                        item = item,
-                        onClick = { onItemClick(item) },
-                        onLongPress = onItemLongPress?.let { { it(item) } },
-                        modifier = Modifier.width(cardWidth),
-                    )
-                }
+                    items(
+                        shelf.items,
+                        key = { it.browseId ?: it.videoId ?: it.title },
+                    ) { item ->
+                        HeroCard(
+                            item = item,
+                            onClick = { onItemClick(item) },
+                            onLongPress = onItemLongPress?.let { { it(item) } },
+                            modifier = Modifier.width(cardWidth),
+                        )
+                    }
             }
         }
     }
@@ -734,7 +750,10 @@ internal fun Shelf(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             leadingCard?.let { card -> item(key = "leading") { card() } }
-            items(shelf.items) { item ->
+            items(
+                shelf.items,
+                key = { it.browseId ?: it.videoId ?: it.title },
+            ) { item ->
                 ShelfCard(
                     item = item,
                     onClick = { onItemClick(item) },

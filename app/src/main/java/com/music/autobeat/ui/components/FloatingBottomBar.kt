@@ -139,7 +139,7 @@ fun FloatingBottomBar(
     hazeState: HazeState,
     modifier: Modifier = Modifier,
 ) {
-    val pillShape = RoundedCornerShape(percent = 50)
+    val pillShape = remember { RoundedCornerShape(percent = 50) }
     val container = MaterialTheme.colorScheme.surface
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val useGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
@@ -149,7 +149,11 @@ fun FloatingBottomBar(
     // their target leaves the tap itself instant rather than eased.
     val glassSpec: AnimationSpec<Float> = if (reduceAnimation) snap() else GlassSpring
 
-    var dragOffset by remember { mutableFloatStateOf(0f) }
+    // Drag offset lives in the layer, not in composition: it is read only
+    // inside graphicsLayer blocks, so finger moves redraw the indicator
+    // without re-emitting the bar and its tabs every frame. The gesture math
+    // (haptics, settle) uses the gesture-local total, never this state.
+    var dragVisualPx by remember { mutableFloatStateOf(0f) }
     val haptics = rememberHaptics()
     val density = LocalDensity.current
     val currentSelectedIndex by rememberUpdatedState(selectedIndex)
@@ -169,7 +173,7 @@ fun FloatingBottomBar(
     } else 0f
 
     val pillTargetPx = if (tabStepPx > 0f) {
-        selectedIndex * tabStepPx + dragOffset
+        selectedIndex * tabStepPx
     } else 0f
 
     val animatedPillOffset by animateFloatAsState(
@@ -178,20 +182,12 @@ fun FloatingBottomBar(
         label = "pillOffset",
     )
 
-    // How much of a tab's stride is still ahead of the indicator: 0 at rest,
-    // toward 1 in the middle of a move or under a drag that has run away from
-    // it. The stretch below is a function of this and nothing else, which is
-    // what keeps it honest — the shape can only be deformed while it is
-    // actually behind where it is going.
-    val lag = if (tabStepPx > 0f) {
-        (abs(pillTargetPx - animatedPillOffset) / tabStepPx).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-
+    // Stretch is a function of the layer-side drag only (see the indicator
+    // below): programmatic moves ride the spring, finger moves stretch the
+    // layer, and neither path re-emits the bar.
     var lastHapticTab by remember { mutableIntStateOf(selectedIndex) }
 
-    LaunchedEffect(selectedIndex) { dragOffset = 0f }
+    LaunchedEffect(selectedIndex) { dragVisualPx = 0f }
 
     Box(
         modifier = modifier
@@ -221,14 +217,21 @@ fun FloatingBottomBar(
                     .width(with(density) { tabWidthPx.toDp() })
                     .height(with(density) { rowSize.height.toDp() })
                     .graphicsLayer {
-                        translationX = animatedPillOffset
+                        translationX = animatedPillOffset + dragVisualPx
+                        // Layer-local lag: the shape deforms only while the
+                        // finger has run ahead of the sprung indicator.
+                        val dragLag = if (tabStepPx > 0f) {
+                            (abs(dragVisualPx) / tabStepPx).coerceIn(0f, 1f)
+                        } else {
+                            0f
+                        }
                         // Around its own centre, so the indicator draws out
                         // both ways rather than growing a tail off one edge —
                         // a leading edge that ran ahead of the glyph it is
                         // meant to be behind would read as two things moving,
                         // not one thing stretching.
-                        scaleX = 1f + lag * STRETCH
-                        scaleY = 1f - lag * STRETCH * SQUASH
+                        scaleX = 1f + dragLag * STRETCH
+                        scaleY = 1f - dragLag * STRETCH * SQUASH
                     }
                     .clip(pillShape)
                     .then(
@@ -249,7 +252,7 @@ fun FloatingBottomBar(
                     var totalDrag = 0f
                     detectHorizontalDragGestures(
                         onDragStart = { totalDrag = 0f },
-                        onDragCancel = { dragOffset = 0f },
+                        onDragCancel = { dragVisualPx = 0f },
                         onDragEnd = {
                             if (tabStepPx > 0f) {
                                 val ratio = totalDrag / tabStepPx
@@ -263,7 +266,7 @@ fun FloatingBottomBar(
                                     onTabSelected(newIndex)
                                 }
                             }
-                            dragOffset = 0f
+                            dragVisualPx = 0f
                         },
                         onHorizontalDrag = { _, delta ->
                             totalDrag += delta
@@ -274,10 +277,12 @@ fun FloatingBottomBar(
                                     totalDrag * 0.25f
                                 else -> totalDrag
                             }
-                            dragOffset = rawPx
+                            // Layer channel (see declaration): redraws the
+                            // indicator, never recomposes the bar.
+                            dragVisualPx = rawPx
 
                             val approxTab =
-                                (currentSelectedIndex + dragOffset / tabStepPx)
+                                (currentSelectedIndex + rawPx / tabStepPx)
                                     .coerceIn(0f, tabs.lastIndex.toFloat())
                                     .roundToInt()
                             if (approxTab != lastHapticTab) {

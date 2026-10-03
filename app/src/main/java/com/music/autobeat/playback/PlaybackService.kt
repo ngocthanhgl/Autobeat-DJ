@@ -65,10 +65,13 @@ import com.music.autobeat.data.lyrics.EmbeddedLyrics
 import com.music.autobeat.data.lyrics.LyricLine
 import com.music.autobeat.data.lyrics.LyricsRepository
 import com.music.autobeat.data.model.NOTIFICATION_ART_PX
+import com.music.autobeat.data.model.PLAYER_ART_PX
 import com.music.autobeat.data.model.SearchFilter
 import com.music.autobeat.data.model.SearchResult
 import com.music.autobeat.data.model.BrowseItem
 import com.music.autobeat.data.model.ShelfItem
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
 import com.music.autobeat.data.model.artworkAt
 import com.music.autobeat.data.sources.SourceRegistry
 import com.music.autobeat.download.Downloads
@@ -4404,6 +4407,25 @@ class PlaybackService : MediaLibraryService() {
         if (request == preferredPrefetchRequest) return
         preferredPrefetchRequest = request
         preferredPrefetchJob?.cancel()
+
+        // Covers: the player's 1200px copy is cold unless the album was
+        // opened at that rung — row-size copies warm from lists, but every
+        // cold skip pays network+decode inside the icon-tile window.
+        // Fire-and-forget the next two covers at player size into the shared
+        // disk cache; the player request stays cache-identical, so a hit
+        // skips the network with no extra bookkeeping. Runs on both paths
+        // below (the request-equality guard above dedups repeats).
+        runCatching { SingletonImageLoader.get(this) }.getOrNull()?.let { imageLoader ->
+            upcomingSongs.take(2).forEach { song ->
+                val url = song.artworkAt(PLAYER_ART_PX) ?: return@forEach
+                imageLoader.enqueue(
+                    ImageRequest.Builder(this)
+                        .data(url)
+                        .size(PLAYER_ART_PX)
+                        .build(),
+                )
+            }
+        }
 
         fun warm(songs: List<Song>) {
             AudioCache.prefetchQueue(

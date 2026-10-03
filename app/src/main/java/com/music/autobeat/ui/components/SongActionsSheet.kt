@@ -85,6 +85,8 @@ import com.music.autobeat.ui.components.thumbnailBorder
 import com.music.autobeat.ui.theme.ArtworkPalette
 import com.music.autobeat.ui.theme.rememberArtworkPalette
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -428,8 +430,24 @@ private val SHEET_SHAPE = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean, onDownload: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val active by Downloads.active.collectAsStateWithLifecycle()
     val saved by Downloads.saved.collectAsStateWithLifecycle()
+
+    // Coarse phase only — Queued / Running / Failed / settled — so progress
+    // ticks never re-emit this row: the percent text lives in
+    // DownloadRunningRow on its own 5%-stepped flow, and the failure reason
+    // is read once in DownloadFailedRow. A running download used to
+    // recompose the whole row (and re-key its produceState) per fraction
+    // emission for the sheet's lifetime.
+    val phase by remember(song.videoId) {
+        Downloads.active.map { states ->
+            when (states[song.videoId]) {
+                is DownloadState.Queued -> 0
+                is DownloadState.Running -> 1
+                is DownloadState.Failed -> 2
+                null -> 3
+            }
+        }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initial = 3)
 
     // The record is a claim about a folder the user manages themselves, so it
     // is checked against the disk rather than trusted — re-checked whenever the
@@ -451,36 +469,19 @@ private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean,
         onDispose { Downloads.dismissFailure(song.videoId) }
     }
 
-    when (val state = active[song.videoId]) {
-        is DownloadState.Queued -> ActionRow(
+    when (phase) {
+        0 -> ActionRow(
             icon = Icons.Rounded.Downloading,
             label = stringResource(R.string.queued),
             value = stringResource(R.string.cancel),
             accent = palette.accent,
         ) { Downloads.cancel(song.videoId) }
 
-        is DownloadState.Running -> ActionRow(
-            icon = Icons.Rounded.Downloading,
-            label = stringResource(R.string.download_notification_title),
-            // Indeterminate until the first response names a length; a
-            // stuck "0%" reads as broken where a bare label reads as starting.
-            value = if (state.fraction > 0f) "${(state.fraction * 100).toInt()}%" else null,
-            tint = palette.accent,
-            accent = palette.accent,
-        ) { Downloads.cancel(song.videoId) }
+        1 -> DownloadRunningRow(videoId = song.videoId, palette = palette)
 
-        is DownloadState.Failed -> ActionRow(
-            icon = Icons.Rounded.ErrorOutline,
-            label = state.reason,
-            value = stringResource(R.string.retry),
-            // Not the artwork's colour: a failure has to stay legible as a
-            // failure whatever the sleeve happens to be tinted.
-            tint = MaterialTheme.colorScheme.error,
-            accent = MaterialTheme.colorScheme.error,
-            onClick = onDownload,
-        )
+        2 -> DownloadFailedRow(song = song, palette = palette, onDownload = onDownload)
 
-        null -> if (file != null) {
+        else -> if (file != null) {
             ActionRow(
                 icon = Icons.Rounded.DownloadDone,
                 label = stringResource(R.string.saved_to_downloads),
@@ -497,6 +498,49 @@ private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean,
             )
         }
     }
+}
+
+/**
+ * The running-download row: its percent text rides its own flow, stepped to
+ * 5% and distinct, so the parent row (and its disk check above) never hears
+ * the per-fraction ticks.
+ */
+@Composable
+private fun DownloadRunningRow(videoId: String, palette: ArtworkPalette) {
+    val step by remember(videoId) {
+        Downloads.active.map { states ->
+            (states[videoId] as? DownloadState.Running)?.fraction?.let { (it * 20).toInt() }
+        }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initial = null)
+    ActionRow(
+        icon = Icons.Rounded.Downloading,
+        label = stringResource(R.string.download_notification_title),
+        // Indeterminate until the first response names a length; a
+        // stuck "0%" reads as broken where a bare label reads as starting.
+        value = step?.takeIf { it > 0 }?.let { "${it * 5}%" },
+        tint = palette.accent,
+        accent = palette.accent,
+    ) { Downloads.cancel(videoId) }
+}
+
+/** The failed-download row: reads the settled reason once, never ticks. */
+@Composable
+private fun DownloadFailedRow(song: Song, palette: ArtworkPalette, onDownload: () -> Unit) {
+    val reason by remember(song.videoId) {
+        Downloads.active.map { states ->
+            (states[song.videoId] as? DownloadState.Failed)?.reason
+        }.distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initial = null)
+    ActionRow(
+        icon = Icons.Rounded.ErrorOutline,
+        label = reason ?: "",
+        value = stringResource(R.string.retry),
+        // Not the artwork's colour: a failure has to stay legible as a
+        // failure whatever the sleeve happens to be tinted.
+        tint = MaterialTheme.colorScheme.error,
+        accent = MaterialTheme.colorScheme.error,
+        onClick = onDownload,
+    )
 }
 
 /** End of track or a duration, plus a way out once one is running. */

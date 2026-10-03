@@ -257,6 +257,7 @@ import com.music.autobeat.data.settings.LastPlayerScreen
 import com.music.autobeat.data.model.LikeStatus
 import com.music.autobeat.data.model.PlaybackSourceType
 import com.music.autobeat.data.model.PLAYER_ART_PX
+import com.music.autobeat.data.model.ROW_ART_PX
 import com.music.autobeat.data.model.Song
 import com.music.autobeat.data.model.artworkAt
 import com.music.autobeat.playback.BACK_RESTARTS_AFTER_MS
@@ -926,6 +927,9 @@ private fun rememberArtworkLuminance(imageUrl: String?): Float? {
         }
 
         val request = ImageRequest.Builder(context)
+            // Same rendition the sleeve shows (see rememberArtworkColors):
+            // full bytes over the wire would decode to the same 128px, so
+            // ask for the shared player-size entry instead.
             .data(imageUrl.artworkAt(ART_PX))
             .size(128)
             .allowHardware(false)
@@ -1903,6 +1907,24 @@ fun NowPlayingScreen(
             .build()
     }
     var artFailed by remember(artUrl) { mutableStateOf(false) }
+    // Hold-last-bitmap: dropping the old painter the frame the model changes
+    // is the hard cut to the icon tile on every cover change. Keep the last
+    // successful request mounted underneath the new one — it resolves from
+    // the memory cache with no network, so the new cover fades in (Coil's own
+    // 200 ms) over the old cover instead of over an empty tile. Cleared after
+    // the fade lands; overwritten on the next change.
+    var prevArtRequest by remember { mutableStateOf<ImageRequest?>(null) }
+    DisposableEffect(artUrl) {
+        onDispose {
+            if (artLoaded) prevArtRequest = artRequest
+        }
+    }
+    LaunchedEffect(artLoaded, artUrl) {
+        if (artLoaded && prevArtRequest != null) {
+            delay(300)
+            prevArtRequest = null
+        }
+    }
     LaunchedEffect(artUrl, artFailed) {
         // A track with no artwork at all fails immediately and would fail
         // identically three more times: there is no request to make, so there is
@@ -2977,7 +2999,17 @@ fun NowPlayingScreen(
                             .background(Color.Black.copy(alpha = 0.18f)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (!artLoaded && !canvasRendered) {
+                        // The previous cover, held from the memory cache while
+                        // the new one develops over it — see prevArtRequest.
+                        prevArtRequest?.let { prev ->
+                            AsyncImage(
+                                model = prev,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                        if (!artLoaded && !canvasRendered && prevArtRequest == null) {
                             Icon(
                                 imageVector = AutobeatIcons.MusicNote,
                                 contentDescription = null,
@@ -7806,7 +7838,7 @@ private fun InlineQueueRow(
             Spacer(Modifier.width(4.dp))
         }
         AsyncImage(
-            model = song.thumbnailUrl,
+            model = song.artworkAt(ROW_ART_PX),
             contentDescription = null,
             modifier = Modifier
                 .size(36.dp)

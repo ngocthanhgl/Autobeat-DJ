@@ -32,7 +32,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -66,6 +68,7 @@ import com.music.autobeat.playback.EqLayout
 import com.music.autobeat.playback.EqualizerPreset
 import com.music.autobeat.ui.haptics.Haptic
 import com.music.autobeat.ui.haptics.rememberHaptics
+import com.music.autobeat.ui.utils.guardSheetFromContentTouches
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -269,10 +272,13 @@ fun EqualizerScreen(
     }
 
     if (pickingPreset) {
+        val presetSheetState = rememberModalBottomSheetState()
         ModalBottomSheet(
             onDismissRequest = { pickingPreset = false },
+            sheetState = presetSheetState,
             containerColor = MaterialTheme.colorScheme.background,
         ) {
+            Box(Modifier.guardSheetFromContentTouches(presetSheetState)) {
             PresetSheet(
                 selected = preset,
                 onSelect = {
@@ -280,6 +286,7 @@ fun EqualizerScreen(
                     pickingPreset = false
                 },
             )
+            }
         }
     }
 }
