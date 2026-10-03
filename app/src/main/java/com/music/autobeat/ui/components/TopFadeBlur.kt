@@ -31,9 +31,12 @@ import dev.chrisbanes.haze.materials.HazeMaterials
  * Long enough to die inside the artwork on detail pages rather than ending
  * mid-picture as a visible line, short enough to stay clear of the controls
  * sitting under the bar on feed pages. The gradient is eased across the
- * whole height so it still arrives at nothing before the layer ends.
+ * whole height so it still arrives at nothing before the layer ends. Tall
+ * on purpose: the seam the eye finds is the texture step where resampled
+ * blur meets native-sharp content, and stretching the ramp thins that step
+ * past notice.
  */
-internal val FADE_RUN = 48.dp
+internal val FADE_RUN = 72.dp
 
 /**
  * How much blur the fade reaches at its outer edge — short of all of it.
@@ -57,7 +60,7 @@ private const val PEAK = 0.75f
 private const val SCRIM_PEAK = 0.2f
 
 /** Enough stops that the ramp does not band across a near-flat colour. */
-private const val SCRIM_STOPS = 12
+private const val SCRIM_STOPS = 16
 
 /**
  * The glass behind every top bar: full blur along the top edge, ramping to
@@ -152,9 +155,11 @@ fun TopFadeBlur(
                     startIntensity = PEAK,
                     endIntensity = 0f,
                 )
-                // Uniform across the layer, so it would show as texture over
-                // the untouched foot of the ramp — the edge being hidden.
-                noiseFactor = 0f
+                // A whisper of grain so the ramp dithers instead of stepping:
+                // on 8-bit displays the foot of the gradient can quantise
+                // into a visible tonal ring, and the noise breaks that up.
+                // Kept low enough to never read as dirt over flat areas.
+                noiseFactor = 0.08f
             },
     )
 

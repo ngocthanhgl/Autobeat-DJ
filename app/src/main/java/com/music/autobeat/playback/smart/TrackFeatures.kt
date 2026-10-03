@@ -24,7 +24,6 @@ package com.music.autobeat.playback.smart
 import com.music.autobeat.data.TrackLog
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
@@ -66,142 +65,181 @@ object TrackFeatures {
             .onFailure { TrackLog.w(TAG, "Could not parse analysis output", it) }
             .getOrNull()
             ?.let { correctDoubleTime(it) }
+            ?.let { correctKey(it) }
+    }
+
+    /**
+     * Second opinion on the native key, from the same chroma through a
+     * different estimator (Temperley profiles, Pearson correlation, versus
+     * native Krumhansl dot-product).
+     *
+     * Only contested labels are touched: a confident native read stands, and
+     * agreement keeps the label. Disagreement under the floor means neither
+     * estimator can be trusted, so the label is dropped and the policy reads
+     * the track as neutral instead of mixing in the wrong key. A missing
+     * chroma (cached analyses from before the bridge emitted it) keeps the
+     * native label untouched.
+     */
+    fun correctKey(features: Features): Features {
+        val chroma = features.chroma
+        if (chroma.size != 12 || chroma.sum() <= 0 || features.key.isBlank()) return features
+        if (features.keyConfidence >= KEY_CONTESTED_CONFIDENCE) return features
+        val native = parseKeyLabel(features.key) ?: return features
+        val mine = estimateKeyTemperley(chroma) ?: return features
+        if (mine == native) return features
+        TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) vs temperley $mine -> neutral")
+        return features.copy(key = "")
+    }
+
+    /**
+     * Parses a native key label into (pitch class, mode). Sharp is '#' or
+     * U+266F, flat 'b' or U+266D — compared by codepoint so the source stays
+     * ASCII. Returns null when the label is not in the native format.
+     */
+    private fun parseKeyLabel(key: String): Pair<Int, Int>? {
+        val mode = when {
+            key.endsWith(" major") -> 0
+            key.endsWith(" minor") -> 1
+            else -> return null
+        }
+        val name = key.removeSuffix(" major").removeSuffix(" minor")
+        if (name.isEmpty()) return null
+        val base = when (name[0]) {
+            'C' -> 0
+            'D' -> 2
+            'E' -> 4
+            'F' -> 5
+            'G' -> 7
+            'A' -> 9
+            'B' -> 11
+            else -> return null
+        }
+        val accidental = when {
+            name.length == 1 -> 0
+            name.length == 2 && (name[1] == '#' || name[1].code == 0x266F) -> 1
+            name.length == 2 && (name[1] == 'b' || name[1].code == 0x266D) -> -1
+            else -> return null
+        }
+        return Pair((base + accidental + 12) % 12, mode)
+    }
+
+    /** Pearson-correlation key estimate as (pitch class, mode); null when degenerate. */
+    private fun estimateKeyTemperley(chroma: List<Double>): Pair<Int, Int>? {
+        if (chroma.size != 12) return null
+        val mean = chroma.sum() / 12
+        var bestRoot = -1
+        var bestMode = -1
+        var bestScore = Double.NEGATIVE_INFINITY
+        for (root in 0..11) {
+            for (mode in 0..1) {
+                val profile = if (mode == 0) TEMPERLEY_MAJOR else TEMPERLEY_MINOR
+                var xy = 0.0
+                var xx = 0.0
+                var yy = 0.0
+                val profileMean = profile.sum() / 12
+                for (pitch in 0..11) {
+                    val x = chroma[pitch] - mean
+                    val y = profile[(pitch + 12 - root) % 12] - profileMean
+                    xy += x * y
+                    xx += x * x
+                    yy += y * y
+                }
+                if (!(xx > 0) || !(yy > 0)) continue
+                val score = xy / sqrt(xx * yy)
+                if (score > bestScore) {
+                    bestScore = score
+                    bestRoot = root
+                    bestMode = mode
+                }
+            }
+        }
+        if (bestRoot < 0) return null
+        return Pair(bestRoot, bestMode)
     }
 
     /**
      * Double-time backstop, Kotlin side of the native 8th-hat guard
-     * (`tempo_analysis.cpp`): same bass-band lag-ratio test, over the
-     * stored low-energy curve instead of the native envelope. Catches what
-     * the native guard cannot — cached analyses from before the native fix,
-     * and JNI bridges that predate it. Pure (no I/O, no settings) so the
-     * regression test can pin it with synthetic curves.
+     * (`tempo_analysis.cpp`).
+     *
+     * Catches what the native guard cannot — cached analyses from before the
+     * native fix, and JNI bridges that predate it. Pure (no I/O, no settings)
+     * so the regression test can pin it with synthetic onsets.
      *
      * Fires only above [DOUBLE_TIME_GUARD_BPM]: a winner down there can only
      * be the double of a true tempo at/below ~110, and the 140 line
      * (dubstep, half-time hip-hop) stays out of reach. Halving preserves
      * grid phase (every other gridline survives), so firstBeat stands and
      * only the downbeat spacing is rebuilt — picked off the halved grid by
-     * the same strongest-bass rule the native downbeat pass uses.
+     * onset phase.
      *
-     * Two votes, like native: the bass lag-ratio plus broadband parity at
-     * the winner's rate (a snare on the off-beats means true fast material,
-     * bare hats mean a double-read). Both must agree.
+     * Both votes read the native flux-peak train ([Features.onsetTimes],
+     * 86 fps), deliberately NOT the persisted energy curves: those are ~1 s
+     * buckets on a ballad-length track and structurally cannot resolve the
+     * 0.29 s alternation this adjudicates. A double-read packs a full groove
+     * into each halved beat (sparse per claimed beat, busy per halved one);
+     * true fast material stays busy at its own rate, so the pair separates
+     * them without any amplitude information.
      */
     fun correctDoubleTime(features: Features): Features {
         val bpm = features.bpm
         val interval = features.beatInterval.takeIf { it > 0 }
             ?: if (bpm > 0) 60.0 / bpm else 0.0
         if (!(bpm > DOUBLE_TIME_GUARD_BPM) || !(interval > 0)) return features
-        val curve = features.lowEnergyCurve
-        if (curve.size < 16) return features
-        val lagCorr = lagCorrelation(curve, interval)
-        val dblCorr = lagCorrelation(curve, interval * 2)
-        if (!(dblCorr > lagCorr * 1.3 && dblCorr > 0.2)) return features
-        if (!(broadbandParity(features.energyCurve, features.firstBeat, interval) > 1.5)) return features
-        val halved = bpm / 2
-        val halvedInterval = interval * 2
-        val downbeats = rebuildDownbeats(features.firstBeat, halvedInterval, features.duration, curve)
-            .ifEmpty { features.downbeats }
-        TrackLog.d(TAG, "double-time guard: $bpm -> $halved (bass lag $lagCorr vs $dblCorr)")
-        return features.copy(bpm = halved, beatInterval = halvedInterval, downbeats = downbeats)
+        val onsets = features.onsetTimes.filter { it.isFinite() }.sorted()
+        val duration = features.duration
+        if (onsets.isEmpty() || !(duration > interval)) {
+            TrackLog.d(TAG, "double-time guard: $bpm kept (no onset data to vote on)")
+            return features
+        }
+        // Sparse per claimed beat, busy per halved beat: a full groove one
+        // octave down. True fast material (dnb fills, four-floor) stays at
+        // two-plus per beat at its own rate and never reaches the second arm.
+        val perClaimed = onsetsPerBeat(onsets, duration, interval)
+        val perHalved = onsetsPerBeat(onsets, duration, interval * 2)
+        if (perClaimed < DOUBLE_SPARSE_PER_BEAT && perHalved > DOUBLE_BUSY_PER_HALF_BEAT) {
+            val halved = bpm / 2
+            val halvedInterval = interval * 2
+            val downbeats = rebuildDownbeats(features.firstBeat, halvedInterval, duration, onsets)
+                .ifEmpty { features.downbeats }
+            TrackLog.d(TAG, "double-time guard: $bpm -> $halved (onsets $perClaimed/beat, $perHalved/half-beat)")
+            return features.copy(bpm = halved, beatInterval = halvedInterval, downbeats = downbeats)
+        }
+        TrackLog.d(TAG, "double-time guard: $bpm kept (onsets $perClaimed/beat, $perHalved/half-beat)")
+        return features
     }
 
-    /** Normalized lag correlation over a uniform ~20 Hz resampling of [curve]. */
-    private fun lagCorrelation(curve: List<EnergySample>, lag: Double): Double {
-        if (!(lag > 0) || curve.size < 8) return 0.0
-        val start = curve.first().time
-        val end = curve.last().time
-        if (!(end > start) || !(lag < end - start)) return 0.0
-        val step = 0.05
-        val count = ((end - start) / step).toInt().coerceAtMost(6000)
-        if (count < 16) return 0.0
-        val values = DoubleArray(count + 1)
-        var index = 0
-        for (i in 0..count) {
-            val t = start + i * step
-            while (index + 1 < curve.size && curve[index + 1].time <= t) index++
-            values[i] = curve[index].energy
-        }
-        val lagSteps = (lag / step).roundToInt().coerceAtLeast(1)
-        if (lagSteps * 2 >= values.size) return 0.0
-        var cross = 0.0
-        var leftEnergy = 0.0
-        var rightEnergy = 0.0
-        for (i in lagSteps until values.size) {
-            val left = values[i]
-            val right = values[i - lagSteps]
-            cross += left * right
-            leftEnergy += left * left
-            rightEnergy += right * right
-        }
-        return cross / sqrt(maxOf(1e-12, leftEnergy * rightEnergy))
-    }
-
-    /**
-     * Max even/odd mean-energy ratio on the [beat] grid off [firstBeat].
-     * Phase-free (max over the two parities): a double-read alternates full
-     * groove against bare hats, true fast material answers with a snare.
-     */
-    private fun broadbandParity(curve: List<EnergySample>, firstBeat: Double, beat: Double): Double {
-        if (!(beat > 0) || curve.size < 8) return 1.0
-        val lastTime = curve.last().time
-        val firstTime = curve.first().time
-        var evenSum = 0.0
-        var evenN = 0
-        var oddSum = 0.0
-        var oddN = 0
-        var k = 0
-        while (k <= 512) {
-            val t = firstBeat + k * beat
-            if (t > lastTime) break
-            if (t >= firstTime) {
-                val v = curveAt(curve, t, beat * 0.1)
-                if (k % 2 == 0) {
-                    evenSum += v
-                    evenN++
-                } else {
-                    oddSum += v
-                    oddN++
-                }
-            }
-            k++
-        }
-        if (evenN == 0 || oddN == 0) return 1.0
-        val even = evenSum / evenN
-        val odd = oddSum / oddN
-        if (!(even > 0) || !(odd > 0)) return 1.0
-        return maxOf(even / odd, odd / even)
+    /** Mean onset count per grid cell of [interval] over [duration]. */
+    private fun onsetsPerBeat(onsets: List<Double>, duration: Double, interval: Double): Double {
+        if (!(interval > 0) || !(duration > 0)) return Double.NaN
+        val beats = duration / interval
+        if (!(beats >= 1)) return Double.NaN
+        return onsets.count { it >= 0 && it <= duration } / beats
     }
 
     /**
      * Downbeats off the halved grid: four bar-phases from [firstBeat], the
-     * one with the strongest bass underneath is beat one.
+     * one with the most onsets landing on it is beat one.
      */
     private fun rebuildDownbeats(
         firstBeat: Double,
         beat: Double,
         duration: Double,
-        curve: List<EnergySample>,
+        onsets: List<Double>,
     ): List<Double> {
-        if (!(beat > 0) || !(duration > beat)) return emptyList()
+        if (!(beat > 0) || !(duration > beat) || onsets.isEmpty()) return emptyList()
         var bestPhase = 0
-        var bestScore = Double.NEGATIVE_INFINITY
+        var bestScore = -1
         for (phase in 0..3) {
-            var sum = 0.0
             var n = 0
             var k = 0
             while (k <= 512) {
                 val t = firstBeat + (4 * k + phase) * beat
                 if (t > duration) break
-                if (t >= 0) {
-                    sum += curveAt(curve, t, beat * 0.06)
-                    n++
-                }
+                if (t >= 0 && hasOnsetNear(onsets, t, DOWNBEAT_ONSET_RADIUS)) n++
                 k++
             }
-            val mean = if (n > 0) sum / n else Double.NEGATIVE_INFINITY
-            if (mean > bestScore) {
-                bestScore = mean
+            if (n > bestScore) {
+                bestScore = n
                 bestPhase = phase
             }
         }
@@ -216,18 +254,13 @@ object TrackFeatures {
         }
     }
 
-    private fun curveAt(curve: List<EnergySample>, t: Double, radius: Double): Double {
-        var sum = 0.0
-        var n = 0
-        for (sample in curve) {
-            if (sample.time < t - radius) continue
-            if (sample.time > t + radius) break
-            if (sample.energy.isFinite()) {
-                sum += sample.energy
-                n++
-            }
-        }
-        return if (n > 0) sum / n else 0.0
+    /** True when the sorted onset train has a tick within [radius] of [t]. */
+    private fun hasOnsetNear(sortedOnsets: List<Double>, t: Double, radius: Double): Boolean {
+        val i = sortedOnsets.binarySearch(t)
+        if (i >= 0) return true
+        val ip = -i - 1
+        return (ip < sortedOnsets.size && sortedOnsets[ip] - t <= radius) ||
+            (ip > 0 && t - sortedOnsets[ip - 1] <= radius)
     }
 
     /**
@@ -276,6 +309,7 @@ object TrackFeatures {
         val onsetTimes: List<Double> = emptyList(),
         val spectralCentroidCurve: List<EnergySample> = emptyList(),
         val energyCurveFine: List<EnergySample> = emptyList(),
+        val chroma: List<Double> = emptyList(),
     )
 
     fun parse(root: JSONObject): Features = Features(
@@ -307,6 +341,10 @@ object TrackFeatures {
         onsetTimes = root.doubles("onsetTimes"),
         spectralCentroidCurve = root.energyCurve("spectralCentroidCurve"),
         energyCurveFine = root.energyCurve("energyCurveFine"),
+        // Sum-normalized C..B pitch-class energy; absent on cached analyses
+        // from before the bridge emitted it, which disables the second
+        // opinion below instead of guessing.
+        chroma = root.doubles("chroma"),
     )
 
     private fun JSONObject.doubles(name: String): List<Double> {
@@ -348,6 +386,14 @@ object TrackFeatures {
         }
     }
 
+    /** Temperley (1999) key profiles, indexed by semitone above the root. */
+    private val TEMPERLEY_MAJOR = doubleArrayOf(
+        5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0,
+    )
+    private val TEMPERLEY_MINOR = doubleArrayOf(
+        5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0,
+    )
+
     private const val TAG = "AutobeatTrackFeatures"
 
     /**
@@ -356,6 +402,28 @@ object TrackFeatures {
      * (`tempo_analysis.cpp` 8th-hat guard) — keep the two in sync.
      */
     const val DOUBLE_TIME_GUARD_BPM = 165.0
+
+    /**
+     * Onset-density arms of the guard above: a double-read is sparse per
+     * claimed beat (the groove lives one octave down) and busy per halved
+     * beat. True fast material fails one arm or the other — dnb fills and
+     * four-floor stay busy at their own rate, sparse ambient fails the
+     * halved arm.
+     */
+    const val DOUBLE_SPARSE_PER_BEAT = 2.0
+    const val DOUBLE_BUSY_PER_HALF_BEAT = 2.5
+
+    /** Radius for snapping onsets onto rebuilt downbeat gridlines. */
+    private const val DOWNBEAT_ONSET_RADIUS = 0.06
+
+    /**
+     * Key labels below this confidence are contested, not facts: the native
+     * template match reports a margin, and a collapsed margin (sustained
+     * pads, detuned chorus, relative major/minor sharing every pitch class)
+     * means "abstain but labeled". Matches the planner's retune floor —
+     * nothing acts on a key under it anyway.
+     */
+    const val KEY_CONTESTED_CONFIDENCE = 0.5
 
     @JvmStatic private external fun nativeAnalyze(
         samples: FloatArray,

@@ -1,53 +1,41 @@
 package com.music.autobeat
 
-import com.music.autobeat.playback.smart.EnergySample
 import com.music.autobeat.playback.smart.TrackFeatures
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
  * The double-time guard pins the Another-Day-in-Paradise class of failure:
  * a ~102 BPM ballad with driving 8th hats read back above 200 BPM, and the
  * grid, downbeats and every phrase-snapped move inherited the error.
  *
- * Each test synthesizes the low (bass) and broadband energy curves the guard
- * actually votes on, so a retune of the thresholds lands here instead of in
- * a mix nobody can debug by listening.
+ * The guard votes off the native flux-peak train ([TrackFeatures.onsetTimes],
+ * 86 fps) — the only signal with sub-beat resolution. The persisted energy
+ * curves are ~1 s buckets on a ballad-length track and cannot resolve the
+ * 0.29 s alternation, so the tests synthesize onsets, not curves: a
+ * double-read is sparse per claimed beat and busy per halved beat, true fast
+ * material stays busy at its own rate.
  */
 class DoubleTimeGuardTest {
-
-    private fun pulseCurve(
-        duration: Double,
-        step: Double = 0.05,
-        valueAt: (Double) -> Double,
-    ): List<EnergySample> {
-        val out = mutableListOf<EnergySample>()
-        var t = 0.0
-        while (t <= duration) {
-            out.add(EnergySample(t, valueAt(t)))
-            t += step
-        }
-        return out
-    }
 
     private fun features(
         bpm: Double,
         beatInterval: Double,
         firstBeat: Double,
         duration: Double,
-        low: List<EnergySample>,
-        broad: List<EnergySample>,
+        onsets: List<Double>,
+        key: String = "",
+        keyConfidence: Double = 0.0,
+        chroma: List<Double> = emptyList(),
     ) = TrackFeatures.Features(
         duration = duration,
         bpm = bpm,
         beatInterval = beatInterval,
         firstBeat = firstBeat,
         beatConfidence = 0.8,
-        key = "",
-        keyConfidence = 0.0,
+        key = key,
+        keyConfidence = keyConfidence,
         audibleStartTime = 0.0,
         pickupTime = 0.0,
         introEndTime = 0.0,
@@ -59,26 +47,34 @@ class DoubleTimeGuardTest {
         downbeats = emptyList(),
         phraseBoundaries = emptyList(),
         vocalActivityMask = emptyList(),
-        energyCurve = broad,
-        lowEnergyCurve = low,
+        energyCurve = emptyList(),
+        lowEnergyCurve = emptyList(),
         mixInCandidates = emptyList(),
         mixOutCandidates = emptyList(),
+        onsetTimes = onsets,
+        chroma = chroma,
     )
 
     @Test
     fun `ballad double-read halves to true tempo with rebuilt downbeats`() {
-        // True 102 BPM (0.588 s beats), read at 204 (0.294 s): kicks on every
-        // other read-beat, bare hats between.
+        // True 102 BPM (0.588 s beats), read at 204 (0.294 s): a flux peak on
+        // every read-beat (kick/hat coincident on evens, hats on odds) plus
+        // comping stabs after most odds. Sparse per claimed beat (1.3), busy
+        // per halved one (2.6).
         val duration = 200.0
-        val low = pulseCurve(duration) { t ->
-            val d = ((t - 0.3) % 0.588 + 0.588) % 0.588
-            if (minOf(d, 0.588 - d) <= 0.06) 1.0 else 0.02
+        val firstBeat = 0.3
+        val interval = 0.294
+        val onsets = buildList {
+            var k = 0
+            while (true) {
+                val t = firstBeat + k * interval
+                if (t > duration) break
+                add(t)
+                if (k % 2 == 1) add(t + 0.1)
+                k++
+            }
         }
-        val broad = pulseCurve(duration) { t ->
-            val d = ((t - 0.3) % 0.588 + 0.588) % 0.588
-            if (minOf(d, 0.588 - d) <= 0.06) 1.0 else 0.12
-        }
-        val fixed = TrackFeatures.correctDoubleTime(features(204.0, 0.294, 0.3, duration, low, broad))
+        val fixed = TrackFeatures.correctDoubleTime(features(204.0, interval, firstBeat, duration, onsets))
         assertEquals(102.0, fixed.bpm, 1.0)
         assertEquals(0.588, fixed.beatInterval, 0.005)
         assertEquals(0.3, fixed.firstBeat, 1e-9)
@@ -87,20 +83,22 @@ class DoubleTimeGuardTest {
     }
 
     @Test
-    fun `genuine fast kick-snare alternation is kept`() {
-        // True 174 BPM dnb: kick and snare-bleed alternate in the bass band
-        // (so the doubled lag correlates well down low), but the snare answers
-        // on the off-beats in broadband — parity stays weak, no halve.
+    fun `genuine fast material with dense onsets is kept`() {
+        // True 174 BPM dnb: kick, snare and two hats per beat — four onsets
+        // per claimed beat, so the sparse arm never fires.
         val beat = 60.0 / 174.0
         val duration = 120.0
-        fun bandAt(t: Double, weak: Double): Double {
-            val bi = (t - 0.2) / beat
-            if (abs(bi - bi.roundToInt()) > 0.12) return 0.05
-            return if (bi.roundToInt() % 2 == 0) 1.0 else weak
+        val onsets = buildList {
+            var t = 0.2
+            while (t <= duration) {
+                add(t)
+                add(t + 0.08)
+                add(t + 0.17)
+                add(t + 0.26)
+                t += beat
+            }
         }
-        val low = pulseCurve(duration) { bandAt(it, 0.35) }
-        val broad = pulseCurve(duration) { bandAt(it, 0.9) }
-        val fixed = TrackFeatures.correctDoubleTime(features(174.0, beat, 0.2, duration, low, broad))
+        val fixed = TrackFeatures.correctDoubleTime(features(174.0, beat, 0.2, duration, onsets))
         assertEquals(174.0, fixed.bpm, 1e-9)
         assertEquals(beat, fixed.beatInterval, 1e-9)
     }
@@ -108,22 +106,72 @@ class DoubleTimeGuardTest {
     @Test
     fun `winner below the floor is untouched`() {
         val duration = 200.0
-        val low = pulseCurve(duration) { t ->
-            val d = ((t - 0.3) % 0.8 + 0.8) % 0.8
-            if (minOf(d, 0.8 - d) <= 0.06) 1.0 else 0.02
+        val onsets = buildList {
+            var t = 0.3
+            while (t <= duration) {
+                add(t)
+                t += 0.4
+            }
         }
-        val broad = pulseCurve(duration) { 0.5 }
-        val fixed = TrackFeatures.correctDoubleTime(features(150.0, 0.4, 0.3, duration, low, broad))
+        val fixed = TrackFeatures.correctDoubleTime(features(150.0, 0.4, 0.3, duration, onsets))
         assertEquals(150.0, fixed.bpm, 1e-9)
     }
 
     @Test
-    fun `no bass evidence never halves`() {
+    fun `no onset data never halves`() {
         val duration = 200.0
-        val broad = pulseCurve(duration) { 0.5 }
         val fixed = TrackFeatures.correctDoubleTime(
-            features(190.0, 60.0 / 190.0, 0.2, duration, emptyList(), broad),
+            features(190.0, 60.0 / 190.0, 0.2, duration, emptyList()),
         )
         assertEquals(190.0, fixed.bpm, 1e-9)
+    }
+
+    @Test
+    fun `sparse claimed but quiet halved rate is kept`() {
+        // Sparse ambient at a true 180: one onset per claimed beat and only
+        // two per halved beat — the busy arm fails, so no halve.
+        val interval = 60.0 / 180.0
+        val duration = 120.0
+        val onsets = buildList {
+            var t = 0.2
+            while (t <= duration) {
+                add(t)
+                t += interval
+            }
+        }
+        val fixed = TrackFeatures.correctDoubleTime(features(180.0, interval, 0.2, duration, onsets))
+        assertEquals(180.0, fixed.bpm, 1e-9)
+    }
+
+    /** Exact Krumhansl C-major shape: both estimators must agree C major. */
+    private fun cMajorChroma(): List<Double> {
+        val major = listOf(6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
+        val sum = major.sum()
+        return major.map { it / sum }
+    }
+
+    @Test
+    fun `agreeing estimators keep a contested label`() {
+        val fixed = TrackFeatures.correctKey(
+            features(100.0, 0.6, 0.0, 200.0, emptyList(), key = "C major", keyConfidence = 0.2, chroma = cMajorChroma()),
+        )
+        assertEquals("C major", fixed.key)
+    }
+
+    @Test
+    fun `missing chroma keeps the native label`() {
+        val fixed = TrackFeatures.correctKey(
+            features(100.0, 0.6, 0.0, 200.0, emptyList(), key = "F minor", keyConfidence = 0.1),
+        )
+        assertEquals("F minor", fixed.key)
+    }
+
+    @Test
+    fun `confident native label stands whatever the chroma`() {
+        val flat = List(12) { 1.0 / 12 }
+        val fixed = TrackFeatures.correctKey(
+            features(100.0, 0.6, 0.0, 200.0, emptyList(), key = "G major", keyConfidence = 0.7, chroma = flat),
+        )
+        assertEquals("G major", fixed.key)
     }
 }

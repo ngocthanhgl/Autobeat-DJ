@@ -173,6 +173,9 @@ Java_com_music_autobeat_playback_smart_TrackFeatures_nativeAnalyze(
   // 250 ms grid for the buildup gradient.
   json += ",\"onsetTimes\":";
   AppendDoubles(json, result.onset_times);
+  // Sum-normalized C..B chroma for the Kotlin second-opinion key vote.
+  json += ",\"chroma\":";
+  AppendDoubles(json, result.chroma);
   json += ",\"spectralCentroidCurve\":";
   AppendEnergyCurve(json, result.spectral_centroid_frames);
   json += ",\"energyCurveFine\":";

@@ -1480,11 +1480,14 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         val head = region(openSource, 0.0, minOf(window, effectiveDuration), features, trackPitch = AppSettings.mixsetModeEnabled.value)
         val tail = if (tailStart > window / 2) region(openSource, tailStart, effectiveDuration, features) else null
 
-        val headGrid = head?.grid
-        val tailGrid = tail?.grid
-
         // The tail governs where the outgoing track is mixed out, so it takes precedence; the
         // head is what a track uses when it is the *incoming* side of a different transition.
+        // Both grids pass through the double-time guard: the model locks onto
+        // driving 8ths with high confidence and no tempo prior, so an
+        // unguarded grid would overwrite a corrected DSP tempo with its double.
+        val windowEnd = minOf(window, effectiveDuration)
+        val headGrid = head?.grid?.let { guardModelGrid(it, features, trackId, 0.0, windowEnd) }
+        val tailGrid = tail?.grid?.let { guardModelGrid(it, features, trackId, tailStart, effectiveDuration) }
         val leading = tailGrid ?: headGrid
 
         TrackLog.d(
@@ -1945,6 +1948,60 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         duration = durationSeconds,
     )
 
+    /**
+     * Double-time guard for the Beat This! grid: the model has no tempo
+     * prior, so a driving 8th-hat train (ballad choruses, shuffles) reads at
+     * twice the true tempo with high confidence and would otherwise overwrite
+     * the guarded DSP tempo at the `leading` selection above.
+     *
+     * Halves the grid only when it sits at twice the DSP tempo (which already
+     * passed through both the native and the Kotlin guards) AND the window's
+     * onset density contradicts the model's rate. Dense onsets keep the model
+     * — a genuine 200 BPM track the DSP half-read is the symmetric failure,
+     * and the model's rate is the evidence there. Halving keeps every other
+     * beat so the phase stands; downbeats re-snap onto the halved grid the
+     * same way the tracker builds them. Every evaluation logs: a decline is
+     * data for the next retune, not silence.
+     */
+    private fun guardModelGrid(
+        grid: BeatTracker.Grid,
+        dsp: TrackFeatures.Features,
+        trackId: String,
+        windowStart: Double,
+        windowEnd: Double,
+    ): BeatTracker.Grid {
+        val modelBpm = grid.bpm
+        if (!(modelBpm > TrackFeatures.DOUBLE_TIME_GUARD_BPM)) return grid
+        val dspBpm = dsp.bpm
+        if (!(dspBpm > 0)) return grid
+        val ratio = modelBpm / dspBpm
+        if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) return grid
+        val windowBeats = grid.beats.count { it >= windowStart && it < windowEnd }
+        val windowOnsets = dsp.onsetTimes.count { it >= windowStart && it < windowEnd }
+        if (windowBeats < 8 || windowOnsets == 0) {
+            TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (too few window beats/onsets)")
+            return grid
+        }
+        val perBeat = windowOnsets.toDouble() / windowBeats
+        if (perBeat >= MODEL_DENSE_KEEP_PER_BEAT) {
+            TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (dense onsets $perBeat/beat, dsp half-read suspect)")
+            return grid
+        }
+        val halvedBeats = grid.beats.filterIndexed { index, _ -> index % 2 == 0 }
+        if (halvedBeats.size < 4) return grid
+        val snapped = grid.downbeats
+            .mapNotNull { downbeat -> halvedBeats.minByOrNull { abs(it - downbeat) } }
+            .distinct()
+            .sorted()
+        TrackLog.d(TAG, "model-grid guard: $trackId $modelBpm -> ${modelBpm / 2} (dsp $dspBpm, onsets $perBeat/beat)")
+        return grid.copy(
+            bpm = modelBpm / 2,
+            beatInterval = grid.beatInterval * 2,
+            beats = halvedBeats,
+            downbeats = snapped.ifEmpty { grid.downbeats },
+        )
+    }
+
     fun release() {
         highExecutor.shutdownNow()
         lowExecutor.shutdownNow()
@@ -1990,6 +2047,16 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
 
         /** Lane for the track queued to play next. Everything else is 0. */
         const val PRIORITY_NEXT = 1
+
+        /**
+         * Model-grid double-time window: the model rate must sit at twice
+         * the DSP rate within this ratio band, and the window's onset density
+         * must stay under [MODEL_DENSE_KEEP_PER_BEAT] — dense onsets mean
+         * true fast material the DSP half-read, which keeps the model.
+         */
+        const val MODEL_DOUBLE_RATIO_MIN = 1.85
+        const val MODEL_DOUBLE_RATIO_MAX = 2.15
+        const val MODEL_DENSE_KEEP_PER_BEAT = 2.25
         const val PRIORITY_NORMAL = 0
 
         /**

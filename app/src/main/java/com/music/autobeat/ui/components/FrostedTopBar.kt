@@ -362,10 +362,11 @@ private fun ArtworkPageActions(
                     stiffness = Spring.StiffnessMediumLow,
                 ),
             )
-            // One 48dp profile target with no inset is a true 48x48 circle.
-            // Once another action exists, restore the navbar's PILL_INSET at
-            // both edges. This is layout padding inside the surface, not an
-            // outer margin, so PAGE_GUTTER remains unchanged.
+            // One 44dp profile target with no inset is a true 44x44 circle,
+            // matching the logo and back ends. Once another action exists,
+            // restore the navbar's PILL_INSET at both edges. This is layout
+            // padding inside the surface, not an outer margin, so PAGE_GUTTER
+            // remains unchanged.
             .artworkActionEdgePadding(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -387,7 +388,7 @@ private fun ArtworkPageActions(
  */
 private fun Modifier.artworkActionEdgePadding(): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints.copy(minWidth = 0))
-    val oneActionWidth = 48.dp.roundToPx()
+    val oneActionWidth = 44.dp.roundToPx()
     val extraActionFraction = ((placeable.width - oneActionWidth).toFloat() / oneActionWidth)
         .coerceIn(0f, 1f)
     val edgePadding = (PILL_INSET.roundToPx() * extraActionFraction).roundToInt()
@@ -445,27 +446,6 @@ fun TopBarAccountButton(
 ) {
     val translation = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    // Wrapped in an IconButton so it keeps the 48dp target, the ripple and the
-    // spacing every other action in this bar has.
-    IconButton(
-        onClick = onClick,
-        modifier = modifier
-            .graphicsLayer { translationY = translation.value }
-            .pointerInput(onSwipeProfile) {
-                if (onSwipeProfile == null) return@pointerInput
-                var drag = 0f
-                detectVerticalDragGestures(
-                    onVerticalDrag = { change, amount -> change.consume(); drag += amount },
-                    onDragEnd = {
-                        if (kotlin.math.abs(drag) < 28f) return@detectVerticalDragGestures
-                        if (!onSwipeProfile.invoke(drag > 0f)) scope.launch {
-                            translation.snapTo(if (drag > 0f) 9f else -9f)
-                            translation.animateTo(0f, spring())
-                        }
-                    },
-                )
-            },
-    ) {
     // The photo sits on the exact same surface as the logo mark and the
     // back button opposite it — one 44dp circle, one glass, one hairline —
     // so the two ends of the bar read as a pair. The old thumbnail ring was
@@ -479,31 +459,69 @@ fun TopBarAccountButton(
     } else {
         artworkPageSurface(shape = CircleShape, hazeState = hazeState)
     }
-        val photo = account?.thumbnailUrl
-        if (photo != null) {
-            AsyncImage(
-                model = photo,
-                contentDescription = stringResource(R.string.switch_account),
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(AVATAR_SIZE)
-                    .then(avatarSurface),
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(AVATAR_SIZE)
-                    .then(avatarSurface),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Rounded.Person,
+    @Composable
+    fun AccountIconButton() {
+        // Wrapped in an IconButton so it keeps the ripple and the spacing
+        // every other action in this bar has.
+        IconButton(
+            onClick = onClick,
+            modifier = modifier
+                .graphicsLayer { translationY = translation.value }
+                .pointerInput(onSwipeProfile) {
+                    if (onSwipeProfile == null) return@pointerInput
+                    var drag = 0f
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, amount -> change.consume(); drag += amount },
+                        onDragEnd = {
+                            if (kotlin.math.abs(drag) < 28f) return@detectVerticalDragGestures
+                            if (!onSwipeProfile.invoke(drag > 0f)) scope.launch {
+                                translation.snapTo(if (drag > 0f) 9f else -9f)
+                                translation.animateTo(0f, spring())
+                            }
+                        },
+                    )
+                },
+        ) {
+            val photo = account?.thumbnailUrl
+            if (photo != null) {
+                AsyncImage(
+                    model = photo,
                     contentDescription = stringResource(R.string.switch_account),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp),
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(AVATAR_SIZE)
+                        .then(avatarSurface),
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(AVATAR_SIZE)
+                        .then(avatarSurface),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.Person,
+                        contentDescription = stringResource(R.string.switch_account),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
             }
         }
+    }
+    if (inPill) {
+        // The pill wraps this button, so the pill is the circle the eye
+        // compares against the logo: hold it to the same 44dp. The
+        // IconButton's own 48dp minimum would otherwise make the profile
+        // end read ~9% bigger.
+        Box(
+            modifier = Modifier.size(44.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            AccountIconButton()
+        }
+    } else {
+        AccountIconButton()
     }
 }
 

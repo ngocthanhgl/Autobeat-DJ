@@ -1922,6 +1922,9 @@ fun NowPlayingScreen(
     LaunchedEffect(artLoaded, artUrl) {
         if (artLoaded && prevArtRequest != null) {
             delay(300)
+            // held while a panel transition is in flight: clearing the old
+            // cover mid-flight flashes the sleeve behind the banner.
+            if (p > 0f && p < 1f) return@LaunchedEffect
             prevArtRequest = null
         }
     }
@@ -1952,7 +1955,10 @@ fun NowPlayingScreen(
     // bitmap, but it does not make two AsyncImage painters enter Success in
     // the same frame. The sleeve must not hand over to a banner which is still
     // empty just because its own painter finished first.
-    var heroArtLoaded by remember(artUrl, artAttempt, heroMode) { mutableStateOf(false) }
+    // latched per cover url: the panel transition unmounts the banner branch
+    // without changing the art, so only a new url may drop the proof the
+    // sleeve alpha waits on.
+    var heroArtLoaded by remember(artUrl) { mutableStateOf(false) }
     LaunchedEffect(artLoaded, canvasRendered) {
         if (artLoaded || canvasRendered) heroSettled = true
     }
@@ -2421,8 +2427,12 @@ fun NowPlayingScreen(
                 // panel is open) also drops the proof that this particular
                 // destination can draw. If it is mounted again, keep the
                 // sleeve visible until the new painter reports Success.
-                DisposableEffect(artRequest) {
-                    onDispose { heroArtLoaded = false }
+                // latched per cover url above: the panel transition unmounts
+                // this branch without changing the art, so disposal here must
+                // not clear the proof the sleeve alpha waits on. keyed on the
+                // url, so retries keep it and a new track resets it.
+                DisposableEffect(artUrl) {
+                    onDispose { }
                 }
                 AsyncImage(
                     // Decoded at the same size the sleeve asks for, so the two
@@ -2516,15 +2526,28 @@ fun NowPlayingScreen(
             // Opaque wash, never transparent: the material shows its flat base
             // colour where the blur has nothing to sample past the top edge,
             // and transparent meant that flat showed black into the artwork.
-            if (heroVisible > 0.01f) {
-                val wash = rememberArtworkColors(song.thumbnailUrl, canvasFrame)
-                    .colors.firstOrNull() ?: MaterialTheme.colorScheme.surface
-                TopFadeBlur(
-                    hazeState = playerHaze,
-                    pageColor = wash,
-                    scrimColor = Color.Black,
-                    modifier = Modifier.align(Alignment.TopStart),
-                )
+            // kept mounted through the panel transition: the alpha below does
+            // the fading, so unmounting mid-flight cannot flash the bar.
+            if (heroT > 0.01f) {
+                // held across palette reloads and canvas ticks: falling back
+                // to surface for a frame mid-transition flashes the bar.
+                val surface = MaterialTheme.colorScheme.surface
+                val freshWash = rememberArtworkColors(song.thumbnailUrl, canvasFrame)
+                    .colors.firstOrNull()
+                var heldWash by remember(song.thumbnailUrl) { mutableStateOf<Color?>(null) }
+                if (freshWash != null && freshWash != surface) heldWash = freshWash
+                val wash = heldWash ?: freshWash ?: surface
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .graphicsLayer { alpha = heroVisible.coerceIn(0f, 1f) },
+                ) {
+                    TopFadeBlur(
+                        hazeState = playerHaze,
+                        pageColor = wash,
+                        scrimColor = Color.Black,
+                    )
+                }
             }
         }
 
@@ -2896,19 +2919,19 @@ fun NowPlayingScreen(
                 // can simply be added back up rather than measured.
                 val bannerBottom = statusBarTop + topStrip + ART_BOX_TOP_PAD +
                     groupTop + fullArt + ART_TITLE_GAP / 2
-                // Frozen while lyrics are up. The controls now retain their full
-                // footprint across the transition, so this answer is identical
-                // on both sides; avoiding writes during the panel keeps the
-                // backdrop independent of its animation. The first pass is
-                // exempt so a player composed with lyrics already open still
-                // receives an anchor.
+                // frozen while lyrics or the queue are up or settling. the controls
+                // now retain their full footprint across the transition, so this
+                // answer is identical on both sides; avoiding writes during the
+                // panel keeps the backdrop independent of its animation. the
+                // first pass is exempt so a player composed with a panel already
+                // open still receives an anchor.
                 //
                 // Guarded, like the spread above: this runs on every pass, and a
                 // state write from inside a layout is a recomposition asked for
                 // from inside a layout. Writing the same answer back costs a
                 // comparison here and a whole frame if it is left to the snapshot
                 // to notice.
-                val bannerSettled = !lyricsOpen || heroHeight == 0.dp
+                val bannerSettled = (!lyricsOpen && !queueOpen && queueSlide.floatValue == 0f) || heroHeight == 0.dp
                 if (bannerSettled && bannerBottom != heroHeight) {
                     SideEffect { heroHeight = bannerBottom }
                 }
@@ -3433,9 +3456,22 @@ fun NowPlayingScreen(
             // of the player. Whatever is left over above it is the artwork's,
             // which is what keeps this row of controls in the same place on
             // every screen instead of being shoved off the bottom of a tall one.
+            // holds its footprint across the fade: an alpha-only exit still
+            // lays out at zero height once gone, which grows the constraints
+            // above and moves the banner anchor mid-transition.
+            var controlsFootprint by remember { mutableIntStateOf(0) }
             AnimatedVisibility(
                 visible = (!lyricsOpen || lyricsControlsOpen) &&
                     (!queueOpen || queueControlsOpen),
+                modifier = Modifier
+                    .then(
+                        if (controlsFootprint > 0) {
+                            with(density) { Modifier.height(controlsFootprint.toDp()) }
+                        } else Modifier
+                    )
+                    // inside the fixed height above, so it keeps seeing the
+                    // content's own size and the footprint can still grow.
+                    .onSizeChanged { if (it.height > controlsFootprint) controlsFootprint = it.height },
                 // Fade at the final position; never animate the controls' height.
                 enter = fadeIn(tween(220)),
                 exit = fadeOut(tween(160)),

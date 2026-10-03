@@ -341,12 +341,27 @@ fun LocalMusicScreen(
         AnimatedContent(
             targetState = if (inDrillDown) "drill:$drillDownLabel" else "tab:$selectedTab",
             transitionSpec = {
+                fun tabOf(s: String) = s.removePrefix("tab:").toIntOrNull()
+                val from = tabOf(initialState)
+                val to = tabOf(targetState)
                 if (targetState.startsWith("drill:")) {
                     (slideInHorizontally { it } + fadeIn()) togetherWith
                         (slideOutHorizontally { -it / 3 } + fadeOut())
-                } else {
-                    (slideInHorizontally { -it / 3 } + fadeIn()) togetherWith
+                } else if (initialState.startsWith("drill:")) {
+                    // Leaving a drill-down: mirror the push — the tab page
+                    // re-enters from the left, the drill list leaves right.
+                    (slideInHorizontally { -it } + fadeIn()) togetherWith
                         (slideOutHorizontally { it } + fadeOut())
+                } else if (from != null && to != null && to < from) {
+                    // Stepping back to an earlier tab: the earlier page
+                    // re-enters from the left, the current one leaves right.
+                    (slideInHorizontally { -it } + fadeIn()) togetherWith
+                        (slideOutHorizontally { it } + fadeOut())
+                } else {
+                    // Stepping forward (or leaving a drill-down): the new
+                    // page enters from the right, the old one leaves left.
+                    (slideInHorizontally { it } + fadeIn()) togetherWith
+                        (slideOutHorizontally { -it / 3 } + fadeOut())
                 }
             },
             label = "local_music_content",
