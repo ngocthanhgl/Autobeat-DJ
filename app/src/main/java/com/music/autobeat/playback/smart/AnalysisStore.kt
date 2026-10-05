@@ -78,7 +78,23 @@ class AnalysisStore(private val context: Context) {
             // way, and a wrong beat grid is worse than none — so it is dropped
             // and re-earned rather than migrated.
             require(stored.version == SCHEMA_VERSION) { "schema ${stored.version}" }
-            stored.toAnalysis(trackId)
+            // P4: same-version staleness heal — a stored contested key is
+            // re-contested against its own chroma, so a future threshold
+            // retune (or an entry written mid-round) heals on load instead
+            // of riding a stale label for the file's lifetime. Deterministic:
+            // a no-op when the stored label already matches the contest.
+            // Blank-native stays blank (no chroma worth contesting there).
+            stored.toAnalysis(trackId).let { analysis ->
+                if (analysis.chroma.size == 12 &&
+                    analysis.keyConfidence < TrackFeatures.KEY_CONTESTED_CONFIDENCE
+                ) {
+                    val healed = TrackFeatures.adjudicateKey(analysis.chroma, analysis.key, analysis.keyConfidence)
+                    if (healed != analysis.key) {
+                        TrackLog.d(TAG, "Healed stored key for $trackId: ${analysis.key} -> $healed")
+                        analysis.copy(key = healed)
+                    } else analysis
+                } else analysis
+            }
         }
             .onFailure {
                 // A half-written or outdated file is worth exactly nothing and
@@ -149,6 +165,10 @@ class AnalysisStore(private val context: Context) {
         val phraseBoundaries: List<Double> = emptyList(),
         val key: String = "",
         val keyConfidence: Double = 0.0,
+        // P4: the 12-bin native chroma, so a stored key can be re-contested
+        // on load without re-analysis. 12 numbers — negligible next to the
+        // curves. Empty for pre-chroma entries (dropped by the schema bump).
+        val chroma: List<Double> = emptyList(),
         val audibleStartTime: Double? = null,
         val pickupTime: Double? = null,
         val introEndTime: Double = 0.0,
@@ -198,6 +218,7 @@ class AnalysisStore(private val context: Context) {
             phraseBoundaries = phraseBoundaries,
             key = key,
             keyConfidence = keyConfidence,
+            chroma = chroma,
             audibleStartTime = audibleStartTime,
             pickupTime = pickupTime,
             introEndTime = introEndTime,
@@ -244,6 +265,7 @@ class AnalysisStore(private val context: Context) {
                 phraseBoundaries = analysis.phraseBoundaries.map(::round),
                 key = analysis.key,
                 keyConfidence = analysis.keyConfidence,
+                chroma = analysis.chroma,
                 audibleStartTime = analysis.audibleStartTime,
                 pickupTime = analysis.pickupTime,
                 introEndTime = analysis.introEndTime,
@@ -323,7 +345,7 @@ class AnalysisStore(private val context: Context) {
          * re-analysis costs seconds, and a beat grid interpreted under the wrong
          * assumptions is silently wrong for the life of the file.
          */
-        const val SCHEMA_VERSION = 7
+        const val SCHEMA_VERSION = 8
 
         /** A few thousand tracks' worth, at tens of kilobytes each. */
         const val MAX_ENTRIES = 2_000

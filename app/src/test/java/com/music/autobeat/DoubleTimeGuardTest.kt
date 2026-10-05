@@ -127,8 +127,7 @@ class DoubleTimeGuardTest {
     }
 
     @Test
-    fun `sparse claimed but quiet halved rate is kept`() {
-        // Sparse ambient at a true 180: one onset per claimed beat and only
+    fun `sparse claimed but quiet halved rate is kept`() {        // Sparse ambient at a true 180: one onset per claimed beat and only
         // two per halved beat — the busy arm fails, so no halve.
         val interval = 60.0 / 180.0
         val duration = 120.0
@@ -141,6 +140,54 @@ class DoubleTimeGuardTest {
         }
         val fixed = TrackFeatures.correctDoubleTime(features(180.0, interval, 0.2, duration, onsets))
         assertEquals(180.0, fixed.bpm, 1e-9)
+    }
+
+    @Test
+    fun `half-time trap read doubles to the mixable grid`() {
+        // True 140 BPM half-time, read at 70 (0.857 s beats): kick, snare and
+        // subdivided hats pack ~5 onsets per claimed beat, ~2.5 per doubled
+        // one — busy claimed, grooved double. Doubles to 140 with downbeats
+        // on the 4-beat (1.714 s) cycle.
+        val duration = 120.0
+        val firstBeat = 0.2
+        val interval = 60.0 / 70.0
+        val onsets = buildList {
+            var t = firstBeat
+            while (t <= duration) {
+                add(t)
+                add(t + 0.15)
+                add(t + 0.30)
+                add(t + 0.45)
+                add(t + 0.60)
+                t += interval
+            }
+        }
+        val fixed = TrackFeatures.correctDoubleTime(features(70.0, interval, firstBeat, duration, onsets))
+        assertEquals(140.0, fixed.bpm, 1.0)
+        assertEquals(60.0 / 140.0, fixed.beatInterval, 0.005)
+        assertTrue("expected several rebuilt downbeats, got ${fixed.downbeats.size}", fixed.downbeats.size > 3)
+        fixed.downbeats.zipWithNext { a, b -> assertEquals(1.714, b - a, 0.06) }
+    }
+
+    @Test
+    fun `true slow ballad below the half floor is kept`() {
+        // True 70 BPM ballad: ~1.5 onsets per claimed beat never reaches the
+        // 4.0 busy arm, so the double gate leaves it alone.
+        val duration = 200.0
+        val interval = 60.0 / 70.0
+        val onsets = buildList {
+            var t = 0.3
+            var k = 0
+            while (t <= duration) {
+                add(t)
+                if (k % 2 == 0) add(t + 0.2)
+                t += interval
+                k++
+            }
+        }
+        val fixed = TrackFeatures.correctDoubleTime(features(70.0, interval, 0.3, duration, onsets))
+        assertEquals(70.0, fixed.bpm, 1e-9)
+        assertEquals(interval, fixed.beatInterval, 1e-9)
     }
 
     /** Exact Krumhansl C-major shape: both estimators must agree C major. */

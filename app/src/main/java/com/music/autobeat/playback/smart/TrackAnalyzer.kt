@@ -1043,6 +1043,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             firstBeat = grid?.firstBeat ?: entry?.firstBeat ?: 0.0,
             key = entry?.key.orEmpty(),
             keyConfidence = entry?.keyConfidence ?: 0.0,
+            chroma = entry?.chroma.orEmpty(),
             audibleStartTime = entry?.audibleStartTime,
             pickupTime = entry?.pickupTime,
             introEndTime = entry?.introEndTime ?: 0.0,
@@ -1548,6 +1549,9 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                 phraseBoundaries = features.phraseBoundaries,
                 key = features.key,
                 keyConfidence = features.keyConfidence,
+                // P4: the chroma rides into memory (and the store) so a key
+                // can be re-contested on load without re-analysis.
+                chroma = features.chroma,
                 audibleStartTime = features.audibleStartTime,
                 pickupTime = features.pickupTime,
                 introEndTime = features.introEndTime,
@@ -2106,35 +2110,72 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         windowEnd: Double,
     ): BeatTracker.Grid {
         val modelBpm = grid.bpm
-        if (!(modelBpm > TrackFeatures.DOUBLE_TIME_GUARD_BPM)) return grid
-        val dspBpm = dsp.bpm
-        if (!(dspBpm > 0)) return grid
-        val ratio = modelBpm / dspBpm
-        if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) return grid
-        val windowBeats = grid.beats.count { it >= windowStart && it < windowEnd }
-        val windowOnsets = dsp.onsetTimes.count { it >= windowStart && it < windowEnd }
-        if (windowBeats < 8 || windowOnsets == 0) {
-            TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (too few window beats/onsets)")
-            return grid
+        if (modelBpm > TrackFeatures.DOUBLE_TIME_GUARD_BPM) {
+            val dspBpm = dsp.bpm
+            if (!(dspBpm > 0)) return grid
+            val ratio = modelBpm / dspBpm
+            if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) return grid
+            val windowBeats = grid.beats.count { it >= windowStart && it < windowEnd }
+            val windowOnsets = dsp.onsetTimes.count { it >= windowStart && it < windowEnd }
+            if (windowBeats < 8 || windowOnsets == 0) {
+                TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (too few window beats/onsets)")
+                return grid
+            }
+            val perBeat = windowOnsets.toDouble() / windowBeats
+            if (perBeat >= MODEL_DENSE_KEEP_PER_BEAT) {
+                TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (dense onsets $perBeat/beat, dsp half-read suspect)")
+                return grid
+            }
+            val halvedBeats = grid.beats.filterIndexed { index, _ -> index % 2 == 0 }
+            if (halvedBeats.size < 4) return grid
+            val snapped = grid.downbeats
+                .mapNotNull { downbeat -> halvedBeats.minByOrNull { abs(it - downbeat) } }
+                .distinct()
+                .sorted()
+            TrackLog.d(TAG, "model-grid guard: $trackId $modelBpm -> ${modelBpm / 2} (dsp $dspBpm, onsets $perBeat/beat)")
+            return grid.copy(
+                bpm = modelBpm / 2,
+                beatInterval = grid.beatInterval * 2,
+                beats = halvedBeats,
+                downbeats = snapped.ifEmpty { grid.downbeats },
+            )
         }
-        val perBeat = windowOnsets.toDouble() / windowBeats
-        if (perBeat >= MODEL_DENSE_KEEP_PER_BEAT) {
-            TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (dense onsets $perBeat/beat, dsp half-read suspect)")
-            return grid
+        // P0 tempo honesty: the mirror hole — a model grid below the half
+        // floor against a ~2x DSP read is a half-read (70/140 band), not a
+        // slow track. Doubled only on busy window evidence (subdivision
+        // packed into the claimed beats); a sparse window keeps the model —
+        // true slow material lives below 3.0 onsets/beat. Midpoints are
+        // interpolated so beat-level consumers keep phase; downbeats stand
+        // (they are a valid subset of the doubled grid).
+        if (modelBpm < TrackFeatures.HALF_TIME_GUARD_BPM) {
+            val dspBpm = dsp.bpm
+            if (!(dspBpm > 0)) return grid
+            val ratio = dspBpm / modelBpm
+            if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) return grid
+            val windowBeats = grid.beats.count { it >= windowStart && it < windowEnd }
+            val windowOnsets = dsp.onsetTimes.count { it >= windowStart && it < windowEnd }
+            if (windowBeats < 8 || windowOnsets == 0) {
+                TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (too few window beats/onsets)")
+                return grid
+            }
+            val perBeat = windowOnsets.toDouble() / windowBeats
+            if (perBeat < MODEL_SPARSE_KEEP_PER_BEAT) {
+                TrackLog.d(TAG, "model-grid guard: $trackId model $modelBpm vs dsp $dspBpm kept (sparse onsets $perBeat/beat, true slow suspect)")
+                return grid
+            }
+            val halfInterval = grid.beatInterval / 2
+            if (!(halfInterval > 0)) return grid
+            val doubledBeats = grid.beats.flatMap { listOf(it, it + halfInterval) }.sorted()
+            if (doubledBeats.size < 8) return grid
+            TrackLog.d(TAG, "model-grid guard: $trackId $modelBpm -> ${modelBpm * 2} (dsp $dspBpm, onsets $perBeat/beat)")
+            return grid.copy(
+                bpm = modelBpm * 2,
+                beatInterval = halfInterval,
+                beats = doubledBeats,
+                downbeats = grid.downbeats,
+            )
         }
-        val halvedBeats = grid.beats.filterIndexed { index, _ -> index % 2 == 0 }
-        if (halvedBeats.size < 4) return grid
-        val snapped = grid.downbeats
-            .mapNotNull { downbeat -> halvedBeats.minByOrNull { abs(it - downbeat) } }
-            .distinct()
-            .sorted()
-        TrackLog.d(TAG, "model-grid guard: $trackId $modelBpm -> ${modelBpm / 2} (dsp $dspBpm, onsets $perBeat/beat)")
-        return grid.copy(
-            bpm = modelBpm / 2,
-            beatInterval = grid.beatInterval * 2,
-            beats = halvedBeats,
-            downbeats = snapped.ifEmpty { grid.downbeats },
-        )
+        return grid
     }
 
     fun release() {
@@ -2192,6 +2233,13 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         const val MODEL_DOUBLE_RATIO_MIN = 1.85
         const val MODEL_DOUBLE_RATIO_MAX = 2.15
         const val MODEL_DENSE_KEEP_PER_BEAT = 2.25
+        /**
+         * Mirror floor for the half-read arm above: a window sparser than
+         * this keeps the slow model grid — true slow material, not a missed
+         * octave. Sits above ballad density with margin, below packed
+         * halftime subdivision.
+         */
+        const val MODEL_SPARSE_KEEP_PER_BEAT = 3.0
         const val PRIORITY_NORMAL = 0
 
         /**

@@ -1734,6 +1734,17 @@ private fun alignedTransitionStart(
 }
 
 /**
+ * P1: re-snaps a moved window start back onto the outgoing grid. The vibe
+ * rescale stretches the run-up arithmetically (`end - newDur`), which can
+ * land between grid lines while the log still claims phrase lock — this
+ * walks it back to the nearest phrase/downbeat at or before the target so
+ * the stretched start is a musical event, not arithmetic. Falls back to the
+ * target itself when nothing is in tolerance (same contract as the planner).
+ */
+internal fun resnapStartToGrid(out: TrackAnalysis, targetStart: Double, end: Double): Double =
+    alignedTransitionStart(out, targetStart, end, preferEarlier = true, minimum = 0.0, mixset = true)
+
+/**
  * Where the incoming track's arrangement arrives: the point the outgoing
  * track should be gone by.
  */
@@ -2210,6 +2221,21 @@ private fun backspinFor(
     if (!isPeakEnergyAt(analysis, mixAnchor)) return false
     if (!isPeakEnergyAt(nextAnalysis, dropInB)) return false
     return true
+}
+
+/**
+ * P1: wildcard-backspin gate. The planner's [backspinFor] demands a trusted
+ * drop because a planned spin LANDS on it; a wildcard spin lands on the
+ * blend's own cue, so the drop gates don't apply — but the musical core
+ * does: peak energy at the exit (a spin out of a breakdown is a glitch, not
+ * punctuation) and no vocal under the hand (a scratch over singing is
+ * heckling). Unknown on either axis answers false, same contract as
+ * [backspinFor]. Called from the humanizer, which only runs in DJ mode.
+ */
+internal fun spinPunctuationOk(out: TrackAnalysis, exitSec: Double, spinSeconds: Double): Boolean {
+    if (!isPeakEnergyAt(out, exitSec)) return false
+    val sung = vocalActivityBetween(out, exitSec - spinSeconds, exitSec) ?: return false
+    return sung < 0.3
 }
 
 private fun plannedVocalOverlap(

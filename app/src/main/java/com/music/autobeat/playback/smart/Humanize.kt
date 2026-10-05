@@ -245,7 +245,12 @@ private fun rollWildcard(
     val fade = plan.fadeSeconds
     val candidates = mutableListOf("throw")
     if (fade >= 8.0) candidates += "brake"
-    if (fade >= 6.0) candidates += "backspin"
+    // P1: a wildcard spin lands on the blend's own cue with the default 1 s
+    // hand, so it must earn the musical core (peak exit, clean window) even
+    // though no trusted drop is required — an unevidenced spin is a glitch.
+    if (fade >= 6.0 && spinPunctuationOk(out, plan.transitionEnd, plan.spinSeconds.coerceAtLeast(1.0))) {
+        candidates += "backspin"
+    }
     val clash = isVocalClash(
         vocalActivityBetween(out, plan.transitionStart, plan.transitionEnd),
         vocalActivityBetween(next, plan.incomingCueTime, plan.incomingCueTime + fade),

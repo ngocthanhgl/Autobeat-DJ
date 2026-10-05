@@ -39,6 +39,13 @@ enum class MixRecipe {
 }
 
 /**
+ * P2: overlap fraction above which a blend is a duel, not a bed. Meets the
+ * mixset choke floor (0.12) exactly — a collision the choke treats as a duel
+ * must get the duel recipe, not open mids and a late swap.
+ */
+const val VOCAL_DUEL_OVERLAP = 0.12
+
+/**
  * Picks the recipe. Pure — all inputs are plan-time evidence, so the same
  * pair always gets the same show.
  *
@@ -76,7 +83,12 @@ fun selectMixRecipe(
         }
         else -> Unit
     }
-    if (duckA || delayB || forceDuck || vocalOverlap > 0.2) {
+    // P2: the duel gate meets the choke at 0.12 — the old 0.2 left a band
+    // (0.12-0.2, sung ad-libs under the ARM gates) that read as an
+    // instrumental bed with open mids and a late swap under sung content.
+    // A 0.13 collision the choke already treats as a duel must not get a
+    // bed recipe.
+    if (duckA || delayB || forceDuck || vocalOverlap > VOCAL_DUEL_OVERLAP) {
         return MixRecipe.VOCAL_DUEL
     }
     return MixRecipe.INSTRUMENTAL_BED

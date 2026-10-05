@@ -32,6 +32,7 @@ import com.music.autobeat.playback.smart.EqSchedule
 import com.music.autobeat.playback.smart.snapToBeatGrid
 import com.music.autobeat.playback.smart.VolumeCurve
 import com.music.autobeat.playback.smart.planTransition
+import com.music.autobeat.playback.smart.resnapStartToGrid
 import com.music.autobeat.playback.smart.vocalActivityBetween
 import com.music.autobeat.playback.smart.firstVocalStartSec
 import com.music.autobeat.playback.smart.firstQuietGapSec
@@ -1633,9 +1634,22 @@ class CrossfadeController(
         // beds and LATE_NIGHT plays short intimate ones. The end stays
         // anchored (transitionEnd untouched — the anchor is the outro/drop
         // point); only the run-up stretches. Fraction-based fields (cue,
-        // swap, emphasis offsets) scale or ride along. Skipped for cuts and
-        // sub-4 s blends — stretching those rewrites the style, not the arc.
-        if (mixset && plan.shouldStart && !plan.blocked) {
+        // swap, emphasis offsets) scale or ride along. Blends only — the
+        // old comment promised "skipped for cuts" but the code only checked
+        // duration, so a 4 s+ HARD_CUT/LOOP window got stretched into a
+        // different style; the style gate below keeps that promise. The
+        // stretched start re-snaps onto the outgoing grid (P1): arithmetic
+        // `end - newDur` can land between grid lines while the verdict still
+        // claims phrase lock.
+        // Runs before the G3 anchor freeze below, so the freeze latches the
+        // POST-vibe window — the replay restores a stretched, snapped window,
+        // never a half-reverted one (start/end frozen but fadeSeconds
+        // stretched). The replay also restores fade/overlap from the frozen
+        // span, so any revert is at least self-consistent.
+        val isVibeBlend = plan.transitionStyle == TransitionStyle.DJ_BLEND ||
+            plan.transitionStyle == TransitionStyle.DJ_FILTER ||
+            plan.transitionStyle == TransitionStyle.ECHO_REVERB_OUT
+        if (mixset && isVibeBlend && plan.shouldStart && !plan.blocked) {
             val vibe = AppSettings.harmonicVibe.value
             val overlapScale = when (vibe) {
                 HarmonicSort.Vibe.PEAK -> 1.25
@@ -1658,16 +1672,20 @@ class CrossfadeController(
             if (oldDur >= 4.0 && (overlapScale != 1.0 || wetScale != 1.0)) {
                 val newDur = (oldDur * overlapScale).coerceIn(4.0, 40.0)
                 val durRatio = newDur / oldDur
+                val rawStart = plan.transitionEnd - newDur
+                val snappedStart = currentAnalysis?.let { resnapStartToGrid(it, rawStart, plan.transitionEnd) }
+                    ?: rawStart
+                val snappedDur = (plan.transitionEnd - snappedStart).coerceIn(4.0, 40.0)
                 TrackLog.d(
                     TAG,
                     "vibe ${currentItem.mediaId}->${nextItem.mediaId}: ${vibe.name} " +
                         "overlap ${"%.1f".format(Locale.ROOT, oldDur)}s->" +
-                        "${"%.1f".format(Locale.ROOT, newDur)}s wet x$wetScale",
+                        "${"%.1f".format(Locale.ROOT, snappedDur)}s wet x$wetScale",
                 )
                 plan = plan.copy(
-                    transitionStart = plan.transitionEnd - newDur,
-                    fadeSeconds = newDur,
-                    overlapSeconds = newDur,
+                    transitionStart = plan.transitionEnd - snappedDur,
+                    fadeSeconds = snappedDur,
+                    overlapSeconds = snappedDur,
                     echoAmount = (plan.echoAmount * wetScale).coerceIn(0.0, 1.0),
                     reverbAmount = (plan.reverbAmount * wetScale).coerceIn(0.0, 0.5),
                     halfTimeEmphasis = plan.halfTimeEmphasis.map { it * durRatio },
@@ -1732,9 +1750,17 @@ class CrossfadeController(
                     if ((frozenAnchorEndSec * 1000).roundToLong() <= player.currentPosition) {
                         frozenAnchorPair = null
                     } else {
+                        // P1: the replay restores lengths from the frozen span,
+                        // not just the edges — a revert replays the whole
+                        // frozen window (vibe-stretched and snapped, or
+                        // pre-vibe), never start/end from one version and
+                        // fadeSeconds from another.
+                        val frozenDur = (frozenAnchorEndSec - frozenAnchorStartSec).coerceAtLeast(0.1)
                         plan = plan.copy(
                             transitionStart = frozenAnchorStartSec,
                             transitionEnd = frozenAnchorEndSec,
+                            fadeSeconds = frozenDur,
+                            overlapSeconds = frozenDur,
                         )
                     }
                 } else if (remainingMs in 1..anchorFreezeAheadMs &&
@@ -2811,6 +2837,88 @@ class CrossfadeController(
         // cursor above — a repeat-all lap must schedule fresh, not inherit.
         eqSwapFired = false
         eqSwapStartProgress = 0f
+
+        // P2: ARM snapshots go stale the moment evidence lands (ARM lead is
+        // 4-6 s; analysis flight overlaps it on every cold pair). Re-snapshot
+        // here — incoming is still at 0 volume and the processors glide, so
+        // this is the last inaudible moment. Upgrades only (false→true,
+        // empty→filled): an ARM-voiced defense stays voiced; a late arrival
+        // only ever ADDS evidence. Loudness re-aims both decks (glided),
+        // duck/delay flags recompute with the ARM expressions over the
+        // handoff-anchored windows, and empty mask/energy snapshots fill in
+        // for the live followers. Logs when anything flips, so the session
+        // log shows what the ARM never saw.
+        if (render.eqEnabled) {
+            val freshOut = out.currentMediaItem?.let { analysisFor(it) }
+            val freshIn = into.currentMediaItem?.let { analysisFor(it) }
+            loudnessGains.outgoing(loudnessGainDbFor(out.currentMediaItem))
+            loudnessGains.incoming(loudnessGainDbFor(into.currentMediaItem))
+            val overlap = render.overlapSeconds
+            if (overlap > 0 && fadeEndMs > 0L && incomingCueTimeMs >= 0L) {
+                val fadeEndSec = fadeEndMs / 1000.0
+                val cueSec = incomingCueTimeMs / 1000.0
+                if (!render.duckAMids && freshOut != null) {
+                    val zoneStart = fadeEndSec - overlap
+                    val zoneEnd = fadeEndSec - overlap * 0.3
+                    val phraseEnd = firstQuietGapSec(freshOut, zoneStart, zoneEnd) ?: zoneEnd
+                    val hot = vocalActivityBetween(freshOut, zoneStart, phraseEnd)?.let { it > 0.50 } ?: false
+                    if (hot) {
+                        render = render.copy(duckAMids = true)
+                        TrackLog.d(TAG, "handoff resnapshot: duckA off->on (evidence landed after ARM)")
+                    }
+                }
+                if (!render.delayBMids && freshIn != null) {
+                    val entryBeats = if (freshIn.beatInterval > 0) freshIn.beatInterval * 16 else 8.0
+                    val firstSing = firstVocalStartSec(
+                        freshIn, cueSec, cueSec + max(entryBeats, overlap * 0.5),
+                    )
+                    val hot = if (firstSing == null || firstSing > cueSec + entryBeats) {
+                        false
+                    } else {
+                        vocalActivityBetween(freshIn, cueSec, min(firstSing + 8.0, cueSec + overlap))
+                            ?.let { it >= VOCAL_ACTIVE_THRESHOLD } ?: false
+                    }
+                    if (hot) {
+                        render = render.copy(delayBMids = true)
+                        TrackLog.d(TAG, "handoff resnapshot: delayB off->on (evidence landed after ARM)")
+                    }
+                }
+                if (render.outgoingVocalMask.isEmpty() && freshOut != null &&
+                    freshOut.vocalActivityMask.isNotEmpty()
+                ) {
+                    render = render.copy(
+                        outgoingVocalTimes = freshOut.energyCurve.map { it.time }.toDoubleArray(),
+                        outgoingVocalMask = freshOut.vocalActivityMask.toDoubleArray(),
+                    )
+                    TrackLog.d(TAG, "handoff resnapshot: outgoing vocal snapshot filled")
+                }
+                if (render.incomingVocalMask.isEmpty() && freshIn != null &&
+                    freshIn.vocalActivityMask.isNotEmpty()
+                ) {
+                    render = render.copy(
+                        incomingVocalTimes = freshIn.energyCurve.map { it.time }.toDoubleArray(),
+                        incomingVocalMask = freshIn.vocalActivityMask.toDoubleArray(),
+                    )
+                    TrackLog.d(TAG, "handoff resnapshot: incoming vocal snapshot filled")
+                }
+                if (render.outgoingEnergyValues.isEmpty() && freshOut != null &&
+                    freshOut.energyCurve.isNotEmpty()
+                ) {
+                    render = render.copy(
+                        outgoingEnergyTimes = freshOut.energyCurve.map { it.time }.toDoubleArray(),
+                        outgoingEnergyValues = freshOut.energyCurve.map { it.energy }.toDoubleArray(),
+                    )
+                }
+                if (render.incomingEnergyValues.isEmpty() && freshIn != null &&
+                    freshIn.energyCurve.isNotEmpty()
+                ) {
+                    render = render.copy(
+                        incomingEnergyTimes = freshIn.energyCurve.map { it.time }.toDoubleArray(),
+                        incomingEnergyValues = freshIn.energyCurve.map { it.energy }.toDoubleArray(),
+                    )
+                }
+            }
+        }
 
         // v2 §7d HALF_TIME: the outgoing deck joins the shared tempo it does
         // not own — the incoming side was already stretched at arm time
@@ -3908,9 +4016,9 @@ class CrossfadeController(
                 val swapSec = (render.eqSwapBeatSec * render.eqSwapBars * 4 / deckRate).toFloat()
                 val t = if (overlap > 0f && swapSec > 0f) {
                     ((progress - eqSwapStartProgress) * overlap / swapSec).coerceIn(0f, 1f)
-                } else {
-                    1f
-                }
+            } else {
+                1f
+            }
                 // Finetune F2: constant-power crossover. The old smoothstep
                 // traded linearly (both bass at ~0.5 mid-swap = an energy
                 // hole right where the ear waits for the switch). cos/sin
@@ -4010,7 +4118,7 @@ class CrossfadeController(
             // vocalGate now drives ownership, not just INSTRUMENTAL_BED —
             // trace 0.12-0.20 collisions were holding old mids at 1.0 through
             // mid-blend because recipe was INSTRUMENTAL_BED but gate false.
-            val ownership = if (hardDuel && incomingSings) {
+            val rawOwnership = if (hardDuel && incomingSings) {
                 // Both choruses firing: cubic yield to zero by 55% — the old
                 // vocal is a background by mid-blend, not a co-lead. WASH_OUT
                 // is excluded (its wet tail still needs the band to ring).
@@ -4045,6 +4153,14 @@ class CrossfadeController(
             } else {
                 1f
             }
+            // P3: the kill curves above are arrival-blind — the cubic reaches
+            // -20 dB by 30% progress whether or not B has entered, leaving a
+            // mid-hole under a delayed B entry (the -17 dB stack). Floor the
+            // yield on B's actual arrival: A holds the band until B fills it
+            // (constant-sum handoff), the designed kill still completes once B
+            // is present. Cut-only direction preserved (floor ≤ 1).
+            val ownership =
+                rawOwnership.coerceAtLeast(1f - inMid.coerceIn(0f, 1f))
             // Constant-sum band crossfade keyed off the shared entry aims above:
             // the outgoing band recedes in proportion to the incoming band's
             // arrival (A yields exactly where B fills; where B is silent A
@@ -4097,7 +4213,14 @@ class CrossfadeController(
             // P3 convergence: on long beds the throw arms earlier (from 0.35,
             // inaudible) so space is already in the room before the last
             // phrase — short blends keep the punchy 0.55 attack.
-            val attackStart = if (render.overlapSeconds >= 16.0) 0.35f else 0.55f
+            // P3 (triple-choke fix): the vacuum at 0.97 chokes dry AND wet
+            // together, so a 0.55 attack gets ~2 ticks before burial — the
+            // tail rings but its attack is never heard (room tone, not dub).
+            // Any quiet tail (follower near-silence) earns the early 0.35
+            // attack regardless of bed length; a singing tail keeps the late
+            // attack so the throw never washes over words.
+            val attackStart =
+                if (render.overlapSeconds >= 16.0 || duckA.env < 0.25f) 0.35f else 0.55f
             val attack = ((progress - attackStart) / (0.70f - attackStart)).coerceIn(0f, 1f)
             // P3: the echo fraction shortens toward the drop (beat → half
             // beat past 0.8) — the tail hurries instead of smearing across

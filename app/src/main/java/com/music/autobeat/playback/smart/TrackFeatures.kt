@@ -86,19 +86,30 @@ object TrackFeatures {
      * should not.
      */
     fun correctKey(features: Features): Features {
-        val chroma = features.chroma
-        if (chroma.size != 12 || chroma.sum() <= 0 || features.key.isBlank()) return features
-        if (features.keyConfidence >= KEY_CONTESTED_CONFIDENCE) return features
-        val native = parseKeyLabel(features.key) ?: return features
-        val (root, mode, margin) = estimateKeyTemperley(chroma) ?: return features
-        if (root == native.first && mode == native.second) return features
-        if (margin < KEY_OVERRULE_MARGIN) {
-            TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) vs temperley $root/$mode kept native (margin $margin)")
-            return features
-        }
-        val label = TEMPERLEY_ROOT_NAMES[root] + if (mode == 0) " major" else " minor"
-        TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) overruled by temperley $label (margin $margin)")
+        val label = adjudicateKey(features.chroma, features.key, features.keyConfidence)
+        if (label == features.key) return features
+        TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) overruled by temperley $label")
         return features.copy(key = label)
+    }
+
+    /**
+     * P4: the contest core of [correctKey] over raw inputs, so a stored entry
+     * carrying its chroma can be re-contested on load without re-analysis.
+     * Returns the label that should stand (native or Temperley overrule);
+     * never blank — a missing chroma, an unparseable label, or a coin-flip
+     * margin keeps the native read, matching [correctKey] exactly.
+     */
+    internal fun adjudicateKey(chroma: List<Double>, key: String, keyConfidence: Double): String {
+        if (chroma.size != 12 || chroma.sum() <= 0 || key.isBlank()) return key
+        if (keyConfidence >= KEY_CONTESTED_CONFIDENCE) return key
+        val native = parseKeyLabel(key) ?: return key
+        val (root, mode, margin) = estimateKeyTemperley(chroma) ?: return key
+        if (root == native.first && mode == native.second) return key
+        if (margin < KEY_OVERRULE_MARGIN) {
+            TrackLog.d(TAG, "key contest: native $key ($keyConfidence) vs temperley $root/$mode kept native (margin $margin)")
+            return key
+        }
+        return TEMPERLEY_ROOT_NAMES[root] + if (mode == 0) " major" else " minor"
     }
 
     /**
@@ -201,27 +212,52 @@ object TrackFeatures {
         val bpm = features.bpm
         val interval = features.beatInterval.takeIf { it > 0 }
             ?: if (bpm > 0) 60.0 / bpm else 0.0
-        if (!(bpm > DOUBLE_TIME_GUARD_BPM) || !(interval > 0)) return features
+        if (!(interval > 0)) return features
         val onsets = features.onsetTimes.filter { it.isFinite() }.sorted()
         val duration = features.duration
         if (onsets.isEmpty() || !(duration > interval)) {
             TrackLog.d(TAG, "double-time guard: $bpm kept (no onset data to vote on)")
             return features
         }
-        // Sparse per claimed beat, busy per halved beat: a full groove one
-        // octave down. True fast material (dnb fills, four-floor) stays at
-        // two-plus per beat at its own rate and never reaches the second arm.
-        val perClaimed = onsetsPerBeat(onsets, duration, interval)
-        val perHalved = onsetsPerBeat(onsets, duration, interval * 2)
-        if (perClaimed < DOUBLE_SPARSE_PER_BEAT && perHalved > DOUBLE_BUSY_PER_HALF_BEAT) {
-            val halved = bpm / 2
-            val halvedInterval = interval * 2
-            val downbeats = rebuildDownbeats(features.firstBeat, halvedInterval, duration, onsets)
-                .ifEmpty { features.downbeats }
-            TrackLog.d(TAG, "double-time guard: $bpm -> $halved (onsets $perClaimed/beat, $perHalved/half-beat)")
-            return features.copy(bpm = halved, beatInterval = halvedInterval, downbeats = downbeats)
+        // Halve arm (unchanged): a winner above the floor can only be the
+        // double of a true tempo at/below ~110 BPM. Sparse per claimed beat,
+        // busy per halved beat: a full groove one octave down. True fast
+        // material fails one arm or the other.
+        if (bpm > DOUBLE_TIME_GUARD_BPM) {
+            val perClaimed = onsetsPerBeat(onsets, duration, interval)
+            val perHalved = onsetsPerBeat(onsets, duration, interval * 2)
+            if (perClaimed < DOUBLE_SPARSE_PER_BEAT && perHalved > DOUBLE_BUSY_PER_HALF_BEAT) {
+                val halved = bpm / 2
+                val halvedInterval = interval * 2
+                val downbeats = rebuildDownbeats(features.firstBeat, halvedInterval, duration, onsets)
+                    .ifEmpty { features.downbeats }
+                TrackLog.d(TAG, "double-time guard: $bpm -> $halved (onsets $perClaimed/beat, $perHalved/half-beat)")
+                return features.copy(bpm = halved, beatInterval = halvedInterval, downbeats = downbeats)
+            }
+            TrackLog.d(TAG, "double-time guard: $bpm kept (onsets $perClaimed/beat, $perHalved/half-beat)")
+            return features
         }
-        TrackLog.d(TAG, "double-time guard: $bpm kept (onsets $perClaimed/beat, $perHalved/half-beat)")
+        // Double arm (P0 tempo honesty): the mirror hole — a winner below
+        // the half floor can only be the half of a true tempo at/above ~140
+        // BPM (the 70/140 trap/halftime band). A half-read packs two grooves
+        // into each claimed beat (busy per claimed beat) while the doubled
+        // grid still carries a full groove (not gaps). True slow ballads sit
+        // ~1-2 onsets per claimed beat and never reach the first arm, so the
+        // 4.0 bar keeps them out; sparse ambient fails the doubled arm.
+        if (bpm < HALF_TIME_GUARD_BPM) {
+            val perClaimed = onsetsPerBeat(onsets, duration, interval)
+            val perDoubled = onsetsPerBeat(onsets, duration, interval / 2)
+            if (perClaimed >= HALF_BUSY_PER_BEAT && perDoubled >= HALF_GROOVE_PER_DOUBLE_BEAT) {
+                val doubled = bpm * 2
+                val doubledInterval = interval / 2
+                val downbeats = rebuildDownbeats(features.firstBeat, doubledInterval, duration, onsets)
+                    .ifEmpty { features.downbeats }
+                TrackLog.d(TAG, "half-time guard: $bpm -> $doubled (onsets $perClaimed/beat, $perDoubled/double-beat)")
+                return features.copy(bpm = doubled, beatInterval = doubledInterval, downbeats = downbeats)
+            }
+            TrackLog.d(TAG, "half-time guard: $bpm kept (onsets $perClaimed/beat, $perDoubled/double-beat)")
+            return features
+        }
         return features
     }
 
@@ -439,6 +475,24 @@ object TrackFeatures {
      */
     const val DOUBLE_SPARSE_PER_BEAT = 2.0
     const val DOUBLE_BUSY_PER_HALF_BEAT = 2.5
+
+    /**
+     * Half-time suspect ceiling: a winner below this can only be the half
+     * of a true tempo doubling inside the native search range (70/140 is the
+     * classic). Mirror of [DOUBLE_TIME_GUARD_BPM], added by the P0 tempo
+     * honesty pass — every octave guard before it only looked up.
+     */
+    const val HALF_TIME_GUARD_BPM = 100.0
+
+    /**
+     * Onset-density arms of the double guard above: a half-read is busy per
+     * claimed beat (two grooves packed into one) while the doubled grid
+     * still carries a groove (not gaps). The 4.0 bar is deliberately above
+     * ballad density (~1-2/beat) — a true slow track never reaches the first
+     * arm; sparse ambient fails the second.
+     */
+    const val HALF_BUSY_PER_BEAT = 4.0
+    const val HALF_GROOVE_PER_DOUBLE_BEAT = 1.5
 
     /** Radius for snapping onsets onto rebuilt downbeat gridlines. */
     private const val DOWNBEAT_ONSET_RADIUS = 0.06

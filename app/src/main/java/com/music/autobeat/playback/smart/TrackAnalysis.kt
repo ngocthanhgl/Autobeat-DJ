@@ -66,6 +66,14 @@ data class TrackAnalysis(
 
     val key: String = "",
     val keyConfidence: Double = 0.0,
+    /**
+     * P4: the 12-bin sum-normalized native chroma, kept in memory and
+     * persisted (unlike the fine curve) so a stored entry's key can be
+     * re-contested without re-analysis. Empty for cached pre-chroma
+     * entries, head-only, or failed analyses — callers treat empty as "no
+     * second opinion", never as evidence.
+     */
+    val chroma: List<Double> = emptyList(),
 
     /** Where the file starts making sound, and where the first musical event lands. */
     val audibleStartTime: Double? = null,
