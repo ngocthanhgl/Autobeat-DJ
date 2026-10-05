@@ -592,7 +592,7 @@ fun SettingsScreen(
             }
             row(stringResource(R.string.dj_intensity), "intensity", "energy", "booth") {
                 SettingsRow(
-                    icon = Icons.Rounded.Bolt,
+                    icon = Icons.Rounded.AutoAwesome,
                     title = stringResource(R.string.dj_intensity),
                     subtitle = stringResource(R.string.dj_intensity_subtitle),
                 )
@@ -1470,6 +1470,7 @@ private fun DjIntensity.localizedLabel(): String = stringResource(
     },
 )
 
+@Composable
 private fun ThemeMode.localizedLabel(): String = stringResource(
     when (this) {
         ThemeMode.SYSTEM -> R.string.system
