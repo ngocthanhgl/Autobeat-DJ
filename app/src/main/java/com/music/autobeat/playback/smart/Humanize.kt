@@ -1,5 +1,6 @@
 package com.music.autobeat.playback.smart
 
+import com.music.autobeat.data.settings.AppSettings
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -264,7 +265,8 @@ private fun rollWildcard(
     if (plan.brake || plan.echoThrow || plan.backspin) return null
     if (st.wildcardCooldown > 0) return null
     if (outBeatSec == null || out == null || next == null) return null
-    if (rng.nextDouble() >= WILDCARD_CHANCE) return null
+    // Wildcard punctuation chance follows DJ intensity (LOW keeps 0.08).
+    if (rng.nextDouble() >= AppSettings.djIntensity.value.wildcardChance) return null
     val fade = plan.fadeSeconds
     val candidates = mutableListOf("throw")
     if (fade >= 8.0) candidates += "brake"

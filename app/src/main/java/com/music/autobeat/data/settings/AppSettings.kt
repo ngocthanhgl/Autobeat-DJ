@@ -139,6 +139,36 @@ enum class EqualizerMode {
     MANUAL,
 }
 
+/**
+ * How hard DJ Mode performs. LOW preserves the pre-1.0.1 behavior exactly
+ * (polite cooldown, modest wets); MEDIUM loosens the fire gates; HIGH drops
+ * the key-clash veto on backspins and removes the effect cooldown.
+ */
+enum class DjIntensity(
+    /** Blends to wait after an effected one before another may fire. */
+    val effectCooldownBlends: Int,
+    /** Wildcard punctuation chance per eligible blend (see Humanize). */
+    val wildcardChance: Double,
+    /** Echo-throw send peak. */
+    val throwWet: Double,
+    /** Reverb-wash bed peak. */
+    val washWet: Double,
+    /** Cap on echo+reverb sounding together. */
+    val seriesWetCap: Float,
+    /** Floor under the crush gain-staging multiplier (hot masters). */
+    val crushFloor: Double,
+    /** LATE_NIGHT vibe wet multiplier floor. */
+    val lateNightWet: Double,
+    /** Trailing vocal density that downgrades a spin to a brake. */
+    val singSpinThreshold: Float,
+    /** Whether a backspin still requires a proven key clash. */
+    val backspinRequiresKeyClash: Boolean,
+) {
+    LOW(2, 0.08, 0.45, 0.25, 0.6f, 0.6, 0.6, 0.6f, true),
+    MEDIUM(1, 0.12, 0.55, 0.30, 0.7f, 0.75, 0.7, 0.7f, true),
+    HIGH(0, 0.18, 0.65, 0.38, 0.85f, 0.85, 0.85, 0.75f, false),
+}
+
 /** CPU budget for Automix's background analysis, not its audible mix algorithm. */
 enum class AutomixPerformanceMode(val baseThreads: Int) {
     EFFICIENT(1),
@@ -292,6 +322,7 @@ object AppSettings {
      */
     val smartFadeEnabled = MutableStateFlow(false)
     val mixsetModeEnabled = MutableStateFlow(false)
+    val djIntensity = MutableStateFlow(DjIntensity.MEDIUM)
 
     /**
      * Harmonic Sort's set arc: which energy story the queue is rearranged to
@@ -793,6 +824,11 @@ object AppSettings {
             )
         }.getOrDefault(AutomixPerformanceMode.PERFORMANCE)
         skipSilence.value = prefs.getBoolean(KEY_SKIP_SILENCE, false)
+        djIntensity.value = runCatching {
+            DjIntensity.valueOf(
+                prefs.getString(KEY_DJ_INTENSITY, null) ?: DjIntensity.MEDIUM.name,
+            )
+        }.getOrDefault(DjIntensity.MEDIUM)
         outputPcmMode.value = runCatching {
             OutputPcmMode.valueOf(
                 prefs.getString(KEY_OUTPUT_PCM_MODE, OutputPcmMode.PCM_16.name)
@@ -1084,6 +1120,11 @@ object AppSettings {
         }
         smartMixInProgress.value = false
         sharedHalfTimeBpm.value = null
+    }
+
+    fun setDjIntensity(value: DjIntensity) {
+        djIntensity.value = value
+        prefs.edit().putString(KEY_DJ_INTENSITY, value.name).apply()
     }
 
     fun setHarmonicVibe(value: HarmonicSort.Vibe) {
@@ -1810,6 +1851,7 @@ object AppSettings {
     private const val KEY_CROSSFADE = "crossfade_seconds"
     private const val KEY_SMART_FADE = "smart_fade_enabled"
     private const val KEY_MIXSET_MODE = "mixset_mode_enabled"
+    private const val KEY_DJ_INTENSITY = "dj_intensity"
     private const val KEY_HARMONIC_VIBE = "harmonic_vibe"
     private const val KEY_MIXSET_OVERLAP_CEILING_SECONDS = "mixset_overlap_ceiling_seconds"
     private const val KEY_AUTOMIX_HALF_TEMPO_LOCK = "automix_half_tempo_lock"

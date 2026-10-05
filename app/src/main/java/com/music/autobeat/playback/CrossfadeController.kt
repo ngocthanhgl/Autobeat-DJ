@@ -604,11 +604,15 @@ class CrossfadeController(
     // the outgoing deck (1.5..2.5 s from the plan), whatever the blend span.
     // Longer than a brake by construction — a backspin plan is a real
     // booth pull, never a 1 s blip.
-    private val EFFECT_COOLDOWN_BLENDS = 2
     // F3 rotation: smart blends since the last effected one. The planner is
     // pure and cannot count, so this counter enforces the cooldown at Render
-    // mapping (at most one effected blend per EFFECT_COOLDOWN_BLENDS).
-    private var blendsSinceEffect: Int = EFFECT_COOLDOWN_BLENDS
+    // mapping. The window follows DJ intensity (LOW keeps the legacy 2).
+    private var blendsSinceEffect: Int = AppSettings.djIntensity.value.effectCooldownBlends
+    // One-shot guard for the sung-tail spin-downgrade log above: reset at
+    // every handoff so each blend reports its own downgrade at most once.
+    private var spinDowngradeLogged = false
+    // Pair key the cooldown-strip log last fired for (same one-shot reason).
+    private var stripLoggedPair: String? = null
     // v2 §7d/§11.2: downbeat-emphasis cursor into render.halfTimeEmphasis.
     // A pulse fires once per offset even across pause-parked ticks; the pulse
     // itself is applied after rideFilters so it wins for exactly one tick
@@ -1485,12 +1489,15 @@ class CrossfadeController(
                 HarmonicSort.Vibe.COOL_DOWN -> 0.90
                 HarmonicSort.Vibe.LATE_NIGHT -> 0.75
             }
+            // LATE_NIGHT keeps the arc but no longer stealth-mutes the
+            // sends on hotter rungs: the floor follows DJ intensity.
+            val lateNightWet = AppSettings.djIntensity.value.lateNightWet
             val wetScale = when (vibe) {
                 HarmonicSort.Vibe.PEAK -> 1.3
                 HarmonicSort.Vibe.ARC -> 1.1
                 HarmonicSort.Vibe.WARM_UP -> 0.9
                 HarmonicSort.Vibe.COOL_DOWN -> 0.9
-                HarmonicSort.Vibe.LATE_NIGHT -> 0.6
+                HarmonicSort.Vibe.LATE_NIGHT -> lateNightWet
             }
             val oldDur = plan.transitionEnd - plan.transitionStart
             if (oldDur >= 4.0 && (overlapScale != 1.0 || wetScale != 1.0)) {
@@ -1888,10 +1895,27 @@ class CrossfadeController(
             dropConfidence = nextAnalysis?.dropConfidence,
         )
         // F3 rotation: at most one effected blend per cooldown window
-        // (EFFECT_COOLDOWN_BLENDS). The planner is pure and cannot count
+        // (DJ intensity). The planner is pure and cannot count
         // past blends, so the controller strips throw/brake here when the
         // last effect was too recent. Normal Automix never carries effects.
-        val effectAllowed = !mixset || blendsSinceEffect >= EFFECT_COOLDOWN_BLENDS
+        // Every strip is logged with its reason — a stripped move should be
+        // visible in the session log, never a silent downgrade.
+        val intensity = AppSettings.djIntensity.value
+        val effectAllowed = !mixset || blendsSinceEffect >= intensity.effectCooldownBlends
+        // One-shot per pair: the arm path re-runs every tick while the window
+        // is open, so an unguarded log here would spam once per tick.
+        val stripPair = "${currentItem.mediaId}->${nextItem.mediaId}"
+        if (mixset && !effectAllowed && stripPair != stripLoggedPair &&
+            (plan.echoThrow || plan.brake || plan.backspin || plan.echoAmount > 0 || plan.reverbAmount > 0)
+        ) {
+            stripLoggedPair = stripPair
+            TrackLog.d(
+                TAG,
+                "effect stripped: cooldown blendsSinceEffect=$blendsSinceEffect " +
+                    "cooldown=${intensity.effectCooldownBlends} intensity=${intensity.name} " +
+                    "pair=$stripPair",
+            )
+        }
         if (!begin(
             fade,
             endMs = (plan.transitionEnd * 1000).roundToLong(),
@@ -2269,6 +2293,8 @@ class CrossfadeController(
         fadeMs = fade
         fadeEndMs = endMs
         smartFadeActive = smart
+        spinDowngradeLogged = false
+        stripLoggedPair = null
         incomingCueTimeMs = cueTimeMs.coerceAtLeast(0L)
         incomingPlaybackRate = playbackRate
         render = renderStyle
@@ -2975,7 +3001,18 @@ class CrossfadeController(
             // liveSingA is the trailing 2 s vocal density, refreshed every
             // tick in rideEq above. A sung spin window falls back to the
             // forward brake dive (brake is armed on every backspin plan).
-            val spinning = render.backspin && liveSingA < 0.6f
+            // The threshold follows DJ intensity; the downgrade is logged
+            // once per blend so it never reads as a silent failure.
+            val singThreshold = AppSettings.djIntensity.value.singSpinThreshold
+            val spinning = render.backspin && liveSingA < singThreshold
+            if (render.backspin && !spinning && !spinDowngradeLogged) {
+                spinDowngradeLogged = true
+                TrackLog.d(
+                    TAG,
+                    "backspin downgraded to brake: sung tail liveSingA=$liveSingA " +
+                        "threshold=$singThreshold intensity=${AppSettings.djIntensity.value.name}",
+                )
+            }
             brakeDiveFilters.setBackspin(spinning)
             if (spinning && outProgress >= windowStart) {
                 val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
@@ -3263,7 +3300,7 @@ class CrossfadeController(
         // DJ effects (F1/F3) bookkeeping, captured before Render() is parked
         // below: whether this blend carried a throw/brake, and the throw's
         // delay + amount for closing the send at the handoff.
-        val hadEffect = render.mixset && (render.echoThrow || render.brake)
+        val hadEffect = render.mixset && (render.echoThrow || render.brake || render.backspin)
         val wasDj = render.mixset
         // Captured like the rest: render is parked below, so reading
         // render.brake at the finish tick always sees false and the braked
@@ -3445,6 +3482,8 @@ class CrossfadeController(
         // F3 rotation: only DJ blends advance the cooldown (manual fades and
         // normal Automix leave it alone).
         if (wasDj) blendsSinceEffect = if (hadEffect) 0 else blendsSinceEffect + 1
+        spinDowngradeLogged = false
+        stripLoggedPair = null
         // Blueprint LOOP_CUT_DROP: the vamp never survives the handoff — the
         // deck is retired or re-armed from here, and begin() re-parks anyway.
         loopVamps.open()
@@ -3876,7 +3915,8 @@ class CrossfadeController(
                     val echoW = render.echoAmount.toFloat() * wetRamp * release
                     val verbW = (render.reverbAmount * wetRamp * release).toFloat()
                     val wetSum = echoW + verbW
-                    val headroom = if (wetSum > SERIES_WET_CAP) SERIES_WET_CAP / wetSum else 1f
+                    val seriesCap = seriesWetCapFor()
+                    val headroom = if (wetSum > seriesCap) seriesCap / wetSum else 1f
                     echoFilters.outgoing(echoW * headroom, render.echoBeatSeconds.toFloat())
                     echoFilters.incoming(0f, 0f)
                     // Full-plan P5: voice the plan's freeze point — past
@@ -4553,7 +4593,7 @@ class CrossfadeController(
         /**
          * Spec v2 §9b: the heavy-clash wet ramps ride over this many seconds
          * of the 8 s window, then hold. Voiced so the echo-into-reverb stack
-         * never runs both sends at max together (see [SERIES_WET_CAP]).
+         * never runs both sends at max together (see [seriesWetCapFor]).
          */
         const val HEAVY_CLASH_WET_RAMP_SEC = 3.5f
 
@@ -4563,9 +4603,10 @@ class CrossfadeController(
         /**
          * Series headroom: echo + reverb wet on one deck never sum past this.
          * The two sends stack (echo into reverb), so two modest wets rebuild
-         * the clip each avoids alone. 0.6 keeps the stack gain-staged.
+         * the clip each avoids alone. Follows DJ intensity — LOW keeps the
+         * legacy 0.6.
          */
-        const val SERIES_WET_CAP = 0.6f
+        fun seriesWetCapFor(): Float = AppSettings.djIntensity.value.seriesWetCap
 
         /** Spec v2 §9a: seconds for the incoming wet to drain to zero. */
         const val PLAIN_DISSOLVE_IN_DRAIN_SEC = 3.0f

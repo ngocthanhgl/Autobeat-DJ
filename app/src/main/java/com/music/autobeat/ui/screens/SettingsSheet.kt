@@ -145,6 +145,7 @@ import com.music.autobeat.R
 import com.music.autobeat.data.sources.DeviceCodecs
 import com.music.autobeat.data.settings.AudioQuality
 import com.music.autobeat.data.settings.DownloadQuality
+import com.music.autobeat.data.settings.DjIntensity
 import com.music.autobeat.data.settings.ThemeMode
 import com.music.autobeat.data.stats.Backup
 import com.music.autobeat.playback.AudioCache
@@ -189,6 +190,7 @@ fun SettingsScreen(
     val crossfade by AppSettings.crossfadeSeconds.collectAsStateWithLifecycle()
     val smartFade by AppSettings.smartFadeEnabled.collectAsStateWithLifecycle()
     val mixset by AppSettings.mixsetModeEnabled.collectAsStateWithLifecycle()
+    val djIntensity by AppSettings.djIntensity.collectAsStateWithLifecycle()
     val loudnessNormalization by AppSettings.loudnessNormalizationEnabled.collectAsStateWithLifecycle()
     val automixPerformance by AppSettings.automixPerformanceMode.collectAsStateWithLifecycle()
     val skipSilence by AppSettings.skipSilence.collectAsStateWithLifecycle()
@@ -586,6 +588,20 @@ fun SettingsScreen(
                         }
                         AppSettings.setMixsetModeEnabled(!mixset)
                     },
+                )
+            }
+            row(stringResource(R.string.dj_intensity), "intensity", "energy", "booth") {
+                SettingsRow(
+                    icon = Icons.Rounded.Bolt,
+                    title = stringResource(R.string.dj_intensity),
+                    subtitle = stringResource(R.string.dj_intensity_subtitle),
+                )
+                SegmentedControl(
+                    options = DjIntensity.entries.map { it.localizedLabel() },
+                    selectedIndex = DjIntensity.entries.indexOf(djIntensity),
+                    onSelect = { AppSettings.setDjIntensity(DjIntensity.entries[it]) },
+                    modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
+                    enabled = mixset,
                 )
             }
             val loudnessTitle = stringResource(R.string.loudness_normalization)
@@ -1446,6 +1462,14 @@ private fun DownloadQuality.localizedLabel(): String = stringResource(
 )
 
 @Composable
+private fun DjIntensity.localizedLabel(): String = stringResource(
+    when (this) {
+        DjIntensity.LOW -> R.string.dj_intensity_low
+        DjIntensity.MEDIUM -> R.string.dj_intensity_medium
+        DjIntensity.HIGH -> R.string.dj_intensity_high
+    },
+)
+
 private fun ThemeMode.localizedLabel(): String = stringResource(
     when (this) {
         ThemeMode.SYSTEM -> R.string.system

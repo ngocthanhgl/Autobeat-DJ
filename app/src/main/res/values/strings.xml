@@ -233,6 +233,11 @@
     <string name="mixset_subtitle">This mode enables freeform music mixing with multiple DJ style track transition effects. Tracks can be played for shorter or longer durations depending on the energy level. High BPM music is recommended.</string>
     <string name="dj_mode_pcm_locked">DJ Mode doesn\'t work with 32-bit float — it runs on 16-bit PCM only</string>
     <string name="dj_mode_pcm_locked_note">DJ Mode runs on 16-bit PCM</string>
+    <string name="dj_intensity">DJ intensity</string>
+    <string name="dj_intensity_subtitle">How hard DJ Mode performs transitions: polite blends, audible moves, or full booth energy</string>
+    <string name="dj_intensity_low">Low</string>
+    <string name="dj_intensity_medium">Medium</string>
+    <string name="dj_intensity_high">High</string>
     <string name="automix_performance">Automix performance</string>
     <string name="automix_performance_subtitle">Sets how much CPU background analysis may use</string>
     <string name="automix_performance_warning">Higher performance analyses tracks faster, but can use more battery and make the phone warmer.</string>

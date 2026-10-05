@@ -24,6 +24,7 @@ package com.music.autobeat.playback.smart
 
 import com.music.autobeat.data.TrackLog
 import com.music.autobeat.data.settings.AppSettings
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -876,11 +877,25 @@ private fun backspinPlan(
     val cutAt = mixAnchor.coerceIn(0.0, length)
     // Energy-scaled window: a hotter exit earns a longer pull (1.5..2.5 s).
     // A real booth spinback reads at 2-3 s; 1 s never lets the ear feel it.
-    val spinSeconds = spinSecondsFor(analysis, cutAt)
-    val spinStart = (
-        nearestTimedValue(analysis.downbeats, cutAt - spinSeconds, tolerance = beatSeconds * 2)
-            ?: (cutAt - spinSeconds)
+    val fullSpinSeconds = spinSecondsFor(analysis, cutAt)
+    var spinStart = (
+        nearestTimedValue(analysis.downbeats, cutAt - fullSpinSeconds, tolerance = beatSeconds * 2)
+            ?: (cutAt - fullSpinSeconds)
         ).coerceIn(0.0, cutAt)
+    // Sung tail: a reverse sweep over singing reads as a mistake, so a sung
+    // window gets a SHORTER spin (down to 0.8 s), never a silent downgrade to
+    // a brake — the hand still pulls, it just clears the vocal faster.
+    val sungDensity = vocalActivityBetween(analysis, spinStart, cutAt) ?: 0.0
+    val spinSeconds = if (sungDensity >= 0.3) {
+        val shortened = (fullSpinSeconds * (1.0 - 0.5 * sungDensity)).coerceAtLeast(0.8)
+        spinStart = (
+            nearestTimedValue(analysis.downbeats, cutAt - shortened, tolerance = beatSeconds * 2)
+                ?: (cutAt - shortened)
+            ).coerceIn(0.0, cutAt)
+        shortened
+    } else {
+        fullSpinSeconds
+    }
     // The drop is the landing: keep it clear of the track tail.
     val maxCue = nextLength - MIN_INCOMING_CLEARANCE_SECONDS
     val cue = if (nextLength > 0 && maxCue >= 0) dropTime.coerceIn(0.0, maxCue) else dropTime
@@ -900,7 +915,7 @@ private fun backspinPlan(
         spinSeconds = spinSeconds,
         brake = true,
         echoThrow = true,
-        echoAmount = ECHO_THROW_WET,
+        echoAmount = throwWetFor(),
         // ½-beat dub tail on the outgoing channel while it spins.
         echoPeriodBeats = BACKSPIN_ECHO_PERIOD_BEATS,
         // No vamp: the spin replaces it. loopBars = 0 is the honest cut.
@@ -918,7 +933,11 @@ private fun backspinPlan(
         // No key shift: the pair is provably unblendable, the spin covers the
         // seam keylock-off and the drop lands at its native pitch.
         keyShiftSemitones = 0,
-        policyReasons = policyReasons,
+        policyReasons = if (sungDensity >= 0.3) {
+            policyReasons + "spin-shortened-sung=%.2f".format(Locale.ROOT, spinSeconds)
+        } else {
+            policyReasons
+        },
         reason = if (started) "smart-backspin-drop" else "before-backspin-window",
     )
 }
@@ -1905,8 +1924,16 @@ private fun bassSwapFractionFor(
  * Answers zero for a degenerate span and for any track without a mask, so every
  * caller can set this unconditionally.
  */
-/** Peak echo-send wet for a DJ vocal throw (F1): a send, not an instrument. */
-private const val ECHO_THROW_WET = 0.45
+/**
+ * Peak echo-send wet for a DJ vocal throw (F1): a send, not an instrument.
+ * Follows DJ intensity — LOW keeps the legacy 0.45.
+ */
+private fun throwWetFor(): Double = AppSettings.djIntensity.value.throwWet
+/**
+ * Reverb-wash bed peak (F3): follows DJ intensity — LOW keeps the legacy
+ * [BLEND_REVERB_WET].
+ */
+private fun washWetFor(): Double = AppSettings.djIntensity.value.washWet
 
 /**
  * DJ send-effect selector (F1 throw / F3 wash, DJ-only): which, if any, send
@@ -1960,8 +1987,10 @@ private fun djSendEffectFor(
         // (small dynamic range, peak near 0) needs less wash — two wets on a
         // hot master clip the DSP short clamp. 0.0 range = unmeasured: no-op.
         val crushed = analysis.dynamicRangeDb in 0.01..5.0 && analysis.peakDbfs > -3.0
-        val crushScale = if (crushed) 0.6 else 1.0
-        return false to BLEND_REVERB_WET * crushScale
+        // Crush gain-staging floor follows DJ intensity: hotter rungs keep
+        // more wash on crushed masters (LOW keeps the legacy 0.6).
+        val crushScale = if (crushed) AppSettings.djIntensity.value.crushFloor else 1.0
+        return false to washWetFor() * crushScale
     }
     return false to 0.0
 }
@@ -2048,7 +2077,11 @@ private fun backspinFor(
     val keyOut = trustedKey(analysis)
     val keyIn = trustedKey(nextAnalysis)
     if (keyOut.isBlank() || keyIn.isBlank()) return false
-    if (harmonicallyCompatible(keyOut, keyIn, true)) return false
+    // HIGH intensity drops the key-clash veto: a booth spin-back reads on a
+    // compatible pair too. Lower rungs keep the provably-unblendable gate.
+    if (AppSettings.djIntensity.value.backspinRequiresKeyClash &&
+        harmonicallyCompatible(keyOut, keyIn, true)
+    ) return false
     if (!isPeakEnergyAt(analysis, mixAnchor)) return false
     if (!isPeakEnergyAt(nextAnalysis, dropInB)) return false
     return true
@@ -2407,7 +2440,7 @@ private fun phraseSwitch(
         transitionStyle = TransitionStyle.DJ_BLEND,
         // DJ echo throw (F1): the tail effect above, voiced through the echo
         // send with a 1-beat period (~2 s of tails). Zero when unproven.
-        echoAmount = if (throwFire && mixset) ECHO_THROW_WET else 0.0,
+        echoAmount = if (throwFire && mixset) throwWetFor() else 0.0,
         echoThrow = throwFire && mixset,
         echoPeriodBeats = if (throwFire && mixset) 1.0 else null,
         brake = brakeFor(
@@ -3700,7 +3733,7 @@ private fun planTransitionInner(
         reason = if (started) "smart-duration" else "before-smart-duration",
         // DJ echo throw (F1) + brake (F2): voiced through the echo send /
         // the outgoing deck rate. Zero when unproven.
-        echoAmount = if (throwFireAdaptive && mixset) ECHO_THROW_WET else 0.0,
+        echoAmount = if (throwFireAdaptive && mixset) throwWetFor() else 0.0,
         echoThrow = throwFireAdaptive && mixset,
         echoPeriodBeats = if (throwFireAdaptive && mixset) 1.0 else null,
         brake = brakeFor(
