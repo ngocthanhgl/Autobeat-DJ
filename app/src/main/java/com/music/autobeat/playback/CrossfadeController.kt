@@ -58,6 +58,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.roundToLong
 import kotlin.math.sin
@@ -673,26 +674,70 @@ class CrossfadeController(
     private var bailCooldownUntilMs = 0L
     // Full-audit P2: latched fade span (see driveFade). Rearmed in begin().
     private var spanLatched = 0L
-    // Full-audit P2 S1: live vocal flags (see updateLiveVocalFlags).
-    // Rearmed in begin() with every other per-transition flag.
-    private var liveDuckA = 0f
-    private var liveDelayB = 0f
+    // Full-audit P2 S1: live vocal envelope followers (see updateLiveVocalFlags
+    // and DuckFollower). Rearmed in begin() with every other per-transition flag.
+    private val duckA = DuckFollower()
+    private val duckB = DuckFollower()
     // DJ-literature ownership: continuous per-deck vocal density (raw 2 s
     // mask means, 0..1, no threshold) for the proportional mid carve — the
-    // binary live flags above only know "singing / not", this knows "how
-    // much". Written in updateLiveVocalFlags, read in rideEq. Rearmed in
-    // begin() with every other per-transition flag.
+    // followers above know "duck how much", this knows "sing how much".
+    // Written in updateLiveVocalFlags, read in rideEq. Rearmed in begin()
+    // with every other per-transition flag.
     private var liveSingA = 0f
     private var liveSingB = 0f
     private var lastVocalSlewAt = 0L
     private var liveVocalLogged = false
-    // DJ booth rule: the mid trade is committed per phrase and ridden
-    // through — a DJ pulls the mid down on a surprise vocal but never yanks
-    // it back up on a breath. Once a live flag engages past 0.5 it latches
-    // for the rest of the fade, so gates can't chatter the EQ tables and
-    // ownership up and down mid-blend. Rearmed in begin().
-    private var liveDuckLatchedA = false
-    private var liveDelayLatchedB = false
+    /**
+     * P1: broadcast-ducker envelope follower over the 2 s vocal-mask mean.
+     * Hysteresis gate (engage at [VOCAL_ACTIVE_THRESHOLD], release 0.1
+     * below) so a phrase hovering at the line cannot chatter; attack opens
+     * fast once engaged, hold bridges syllable gaps, release glides shut.
+     * Continuous — deliberately NO latch: a duck that outlives its phrase
+     * reads as a random volume dip, which is the defect this replaces.
+     * Numbers follow the production-ducking blueprint (attack/hold/release
+     * adapted to a per-tick mask-mean detector rather than an audio-rate
+     * sidechain).
+     */
+    private inner class DuckFollower {
+        var env = 0f
+        var engaged = false
+        var holdUntil = 0L
+        fun reset() {
+            env = 0f
+            engaged = false
+            holdUntil = 0L
+        }
+
+        fun step(mean: Double, nowMs: Long, dtMs: Double): Float {
+            if (mean >= VOCAL_ACTIVE_THRESHOLD) {
+                engaged = true
+            } else if (mean < VOCAL_ACTIVE_THRESHOLD - 0.1) {
+                engaged = false
+            }
+            if (engaged) {
+                val k = 1.0 - exp(-dtMs / 150.0)
+                env = (env + (1f - env) * k.toFloat()).coerceIn(0f, 1f)
+                holdUntil = nowMs + 300L
+                return env
+            }
+            if (nowMs < holdUntil) return env
+            env *= exp(-dtMs / 350.0).toFloat()
+            if (env < 0.01f) env = 0f
+            return env
+        }
+    }
+    /** P1: max broadband duck depth, -5 dB. See driveFade cross-scaling. */
+    private val duckVolDepth = 0.44f
+    /** P1: max mid-carve depth, -4 dB. See rideEq cross-scaling. */
+    private val duckMidDepth = 0.37f
+    /**
+     * P3 landing vacuum: a 150 ms hole in the outgoing deck just before the
+     * handoff — silence-before-impact so the incoming track lands as a
+     * restart, not a layer. Armed once per fade at outProgress 0.97;
+     * self-limiting (expires even if done is late). Rearmed in begin().
+     */
+    private var vacuumUntilMs = 0L
+    private var vacuumFired = false
     // DJ reactive engine R3: mid-blend monitors (see rideReactive). An early
     // cut fires done once; a hold parks the handoff until a deadline; the
     // clash duck reuses the live-duck voice path. Rearmed in begin().
@@ -733,17 +778,17 @@ class CrossfadeController(
 
     /**
      * Slides a 2 s vocal window over both decks as the blend travels and
-     * slews the live flags toward what it sees (~500 ms time constant, so a
-     * single hot frame cannot flap the mids). Silence when ungated (empty
-     * snapshot = no evidence, never a block) or when the overlap is unknown.
+     * steps each deck's sidechain follower toward what it sees. Silence when
+     * ungated (empty snapshot = no evidence, never a block) or when the
+     * overlap is unknown.
      */
     private fun updateLiveVocalFlags(outProgress: Float, inProgress: Float) {
         val overlap = render.overlapSeconds
         if (overlap <= 0.0 || fadeEndMs <= 0L) return
         val now = SystemClock.elapsedRealtime()
-        val dt = ((now - lastVocalSlewAt).coerceAtLeast(0L) / 500.0).toFloat().coerceAtMost(1f)
+        val dtMs = (now - lastVocalSlewAt).coerceAtLeast(0L).toDouble()
         lastVocalSlewAt = now
-        if (dt <= 0f) return
+        if (dtMs <= 0.0) return
         // A deck's blend portion ends at the fade end; B deck's starts at cue.
         val aNow = fadeEndMs / 1000.0 - (1.0 - outProgress) * overlap
         val bNow = incomingCueTimeMs / 1000.0 + inProgress * overlap
@@ -755,21 +800,14 @@ class CrossfadeController(
         // 0.0 — silence, never a block, same contract as maskActivity).
         liveSingA = aMean.toFloat().coerceIn(0f, 1f)
         liveSingB = bMean.toFloat().coerceIn(0f, 1f)
-        val aTarget = if (aMean >= VOCAL_ACTIVE_THRESHOLD) 1f else 0f
-        val bTarget = if (bMean >= VOCAL_ACTIVE_THRESHOLD) 1f else 0f
-        liveDuckA += (aTarget - liveDuckA) * dt
-        liveDelayB += (bTarget - liveDelayB) * dt
-        // Engage-latch: crossing 0.5 upward sticks for this fade. A vocal
-        // edge hovering near the detector threshold would otherwise flap
-        // the gates every few seconds, re-voicing the EQ tables and the
-        // ownership quadratic each time (audible pumping).
-        if (liveDuckA > 0.5f) liveDuckLatchedA = true
-        if (liveDelayB > 0.5f) liveDelayLatchedB = true
+        // P1: envelopes follow the room down as well as up — no latch.
+        val envA = duckA.step(aMean, now, dtMs)
+        val envB = duckB.step(bMean, now, dtMs)
         // Full-audit P2 C2: leave a trace when the live path engages beyond
         // the ARM flags — once per fade, like the span-cap log.
-        if (!liveVocalLogged && (liveDuckA > 0.5f || liveDelayB > 0.5f)) {
+        if (!liveVocalLogged && (envA > 0.5f || envB > 0.5f)) {
             liveVocalLogged = true
-            TrackLog.d(TAG, "live vocal engaged mid-blend (duckA=$liveDuckA delayB=$liveDelayB)")
+            TrackLog.d(TAG, "live vocal engaged mid-blend (duckA=$envA delayB=$envB)")
         }
     }
 
@@ -856,18 +894,21 @@ class CrossfadeController(
                 TrackLog.d(TAG, "react: holding handoff — B's voice is on its way", null)
             }
         }
-        // — Clash duck: both decks provably singing in the trailing window
-        // and the live path hasn't engaged. The slew would get there; a
-        // surprise vocal gets ducked now.
-        if (!reactDuckFired && !liveDuckLatchedA) {
+        // — Clash duck: both decks provably singing in the trailing window.
+        // P1: kicks the sidechain envelope to full instead of engaging a
+        // latch — the follower's hold+release brings it back down, so the
+        // surprise vocal gets ducked now without thinning the deck after
+        // the phrase ends.
+        if (!reactDuckFired) {
             val aHot = (maskActivity(render.outgoingVocalTimes, render.outgoingVocalMask, aNow - 2.0, aNow)
                 ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
             val bHot = (maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow - 2.0, bNow)
                 ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
             if (aHot && bHot) {
                 reactDuckFired = true
-                liveDuckA = 1f
-                liveDuckLatchedA = true
+                duckA.env = 1f
+                duckA.engaged = true
+                duckA.holdUntil = SystemClock.elapsedRealtime() + 300L
                 TrackLog.d(TAG, "react: clash duck — both decks singing", null)
             }
         }
@@ -922,6 +963,15 @@ class CrossfadeController(
     private var lastMarkedWindow: TransitionWindow? = null
     /** G1: fingerprint of the plan that produced the latched window. */
     private var lastMarkedFingerprint: String? = null
+    /**
+     * P0: the pair the in-flight arm was rendered against
+     * ("currentId→nextId" at arm time). ARMING/FADING never re-plans, so
+     * every tick there re-validates the queue still names this pair — a
+     * replace/reorder at the next slot while armed must tear the arm down
+     * and re-plan, not ride the old cue and marker into the wrong track.
+     * Nulled whenever the controller returns to IDLE ([finish]).
+     */
+    private var armedPairKey: String? = null
     /** G3: frozen anchor for the final approach — the pair it belongs to. */
     private var frozenAnchorPair: String? = null
     private var frozenAnchorStartSec = 0.0
@@ -953,6 +1003,37 @@ class CrossfadeController(
         lastMarkedFingerprint = null
         frozenAnchorPair = null
         lastTickPositionMs = -1L
+    }
+
+    /**
+     * P0: pair identity of a player's queue — the thing an arm is rendered
+     * against. Compared per tick while armed; any difference means the
+     * queue moved under the fade.
+     */
+    private fun pairKeyOf(player: ExoPlayer): String {
+        val nextIndex = player.nextMediaItemIndex
+        val nextId = if (nextIndex == C.INDEX_UNSET) null else player.getMediaItemAt(nextIndex)?.mediaId
+        return "${player.currentMediaItem?.mediaId}→$nextId"
+    }
+
+    /**
+     * P0: the next slot changed while armed/fading. The cue, rate, render
+     * and marker all name the old track and cannot be re-aimed mid-flight,
+     * so tear down (no F4 backoff — this is the queue's doing, not a
+     * failing plan) and let the IDLE tick re-plan against the new pair.
+     * Post-handoff the blend is already delivered; only the marker latch
+     * is stale there, so leave the fade alone and just clear the latch.
+     */
+    private fun onNextChanged() {
+        val key = runCatching { pairKeyOf(active()) }.getOrNull()
+        TrackLog.d(TAG, "next changed mid-$phase: armed=$armedPairKey now=$key: re-plan")
+        clearMarkerLatch()
+        if (phase == Phase.ARMING || (phase == Phase.FADING && !handedOff)) {
+            armedPairKey = null
+            // Same exemption as a swap cut: deliberate queue surgery, not a
+            // failing plan, so no F4 backoff — the IDLE tick re-arms at once.
+            bail(fromSwap = true)
+        }
     }
 
     /**
@@ -2160,6 +2241,14 @@ class CrossfadeController(
         val player = runCatching { active() }.getOrNull() ?: return
         AppSettings.smartTransitionWindow.value = null
         AppSettings.sharedHalfTimeBpm.value = null
+        // P0: a reorder/replace at the next slot while armed invalidates the
+        // cue AND the marker latch, not just the published window. Detect it
+        // here (the controller has no timeline listener) and tear down now
+        // instead of riding the stale arm into the wrong track.
+        if (phase != Phase.IDLE && armedPairKey != null && armedPairKey != pairKeyOf(player)) {
+            onNextChanged()
+            return
+        }
         publishAnalysisState()
         requestAnalysisAround(player, player.duration)
     }
@@ -2380,14 +2469,16 @@ class CrossfadeController(
         consecutiveBailCount = 0
         bailCooldownUntilMs = 0L
         spanLatched = 0L
-        liveDuckA = 0f
-        liveDelayB = 0f
+        // P1: sidechain followers re-armed (envelopes, not latches).
+        duckA.reset()
+        duckB.reset()
+        // P3: landing vacuum re-armed.
+        vacuumUntilMs = 0L
+        vacuumFired = false
         liveSingA = 0f
         liveSingB = 0f
         lastVocalSlewAt = 0L
         liveVocalLogged = false
-        liveDuckLatchedA = false
-        liveDelayLatchedB = false
         reactCutNow = false
         reactHoldUntilMs = 0L
         reactCutFired = false
@@ -2481,6 +2572,9 @@ class CrossfadeController(
         into.playWhenReady = false
         into.prepare()
 
+        // P0: snapshot the pair this arm is rendered against. Every
+        // ARMING/FADING tick re-validates it (see onNextChanged).
+        armedPairKey = pairKeyOf(out)
         phase = Phase.ARMING
         return true
     }
@@ -2496,6 +2590,9 @@ class CrossfadeController(
         val out = outgoing ?: return bail()
         val into = incoming ?: return bail()
         if (!stillWorthFading()) return bail()
+        // P0: the queue moved under the arm — tear down and re-plan, never
+        // ride a cue rendered for the old next track.
+        if (armedPairKey != pairKeyOf(active())) return onNextChanged()
         // Paused while armed: the transition is no longer imminent, and holding
         // a prepared decoder open against a stopped player is worse than arming
         // again when playback resumes.
@@ -2726,6 +2823,10 @@ class CrossfadeController(
     private fun driveFade() {
         val out = outgoing ?: return bail()
         val player = incoming ?: return bail()
+        // P0: same guard as driveArming, but only pre-handoff — past the
+        // handoff the blend is delivered and mid-fade surgery would be worse
+        // than the drift (onNextChanged clears the stale marker there).
+        if (!handedOff && armedPairKey != pairKeyOf(active())) return onNextChanged()
         // The incoming track gets the same say over the length as the outgoing
         // one did, so a long crossfade into a short track tightens rather than
         // swallowing it. Its duration is often still unknown when the fade
@@ -2893,7 +2994,26 @@ class CrossfadeController(
             val speed = AppSettings.playbackSpeed.value
             val diveDepth =
                 (1f - lastBrakeRate / speed.coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
-            out.volume = 1f - diveDepth * 0.6f
+            // P2: valley-masking on duels — the EQ story needs a small
+            // coexistence pad or residual double-mid sits exposed at unity.
+            // Up to -1.6 dB, breathed by the live sidechain, duel-only.
+            val duelPad = if (render.mixRecipe == MixRecipe.VOCAL_DUEL) {
+                1f - 0.17f * duckA.env * inProgress.coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            out.volume = (1f - diveDepth * 0.6f) * duelPad
+        }
+        // P1 sidechain broadband: up to -5 dB per deck, cross-scaled by the
+        // other deck's audibility — a solo vocal never ducks itself, and the
+        // duck breathes with the crossfade instead of latching. Applied once
+        // here, downstream of every curve and the level ride, so the mute
+        // disposal below still wins. DJ-only: stock gains run untouched.
+        if (render.mixset && smartFadeActive) {
+            val aYieldVol = duckA.env * inProgress.coerceIn(0f, 1f)
+            val bYieldVol = duckB.env * (1f - outProgress).coerceIn(0f, 1f)
+            if (aYieldVol > 0.005f) out.volume = out.volume * (1f - duckVolDepth * aYieldVol)
+            if (bYieldVol > 0.005f) player.volume = player.volume * (1f - duckVolDepth * bYieldVol)
         }
         // Half-time downbeat emphasis (§11.2): a 2-frame low-pass pulse as the
         // stretched grid crosses each planned phrase start. Tracked so a pulse
@@ -2903,6 +3023,10 @@ class CrossfadeController(
         // handoff, and [filters] describes the split between the track arriving
         // and the track leaving, which only exists once both are audible.
         rideFilters(progress, inProgress)
+        // P3 convergence stack: loop-roll tighten on the outgoing deck over
+        // the last phrase (see rideFxStack). Own route (loopVamps), so it
+        // never fights the filter/EQ rides above.
+        rideFxStack(progress)
         // DJ-EQ spec: per-tick 3-band targets from the type schedule. Runs
         // after the sweep ride; the emphasis pulse below touches the SVF, not
         // the EQ, so ordering between them is irrelevant.
@@ -2952,6 +3076,25 @@ class CrossfadeController(
             dryKilled = true
         } else if (render.mixset && !smartFadeActive && progress >= 0.80f) {
             out.volume = muteRampGain(out.volume)
+        }
+        // P3 landing vacuum: at outProgress 0.97 both decks drop to a 150 ms
+        // near-silence while the tails ring — the hole the drop lands in.
+        // Skipped when a brake/spin owns the ending (their envelope is the
+        // gesture) and on cut families (the flip is the gesture). finish()
+        // restores the incoming deck to full, so the sequence is hole →
+        // impact, never hole → hole.
+        if (!vacuumFired && !handedOff && render.mixset && smartFadeActive &&
+            (render.style == TransitionStyle.DJ_BLEND || render.style == TransitionStyle.DJ_FILTER) &&
+            render.overlapSeconds >= 8.0 && !render.brake && !render.backspin &&
+            outProgress >= 0.97f
+        ) {
+            vacuumFired = true
+            vacuumUntilMs = SystemClock.elapsedRealtime() + 150L
+            TrackLog.d(TAG, "landing vacuum armed at outProgress=$outProgress")
+        }
+        if (vacuumUntilMs > 0L && SystemClock.elapsedRealtime() < vacuumUntilMs) {
+            out.volume = out.volume * 0.12f
+            player.volume = player.volume * 0.12f
         }
         // v2 §7d/§11.2: no shelf on the processor, so the "low-shelf +3dB"
         // accent is a one-tick dip of the incoming high-pass to 80 Hz at
@@ -3169,11 +3312,11 @@ class CrossfadeController(
             out.playbackState == Player.STATE_IDLE ||
             settingSwitchedOff
         // span-narrow clamp: an incoming cap tightening effSpan mid-fade must
-        // not fire done inside the 120 ms mute ramp — the ramp always lands
+        // not fire done inside the mute ramp — the ramp always lands
         // before finish(). untripped (start < 0) reads settled, so only a
-        // live ramp ever holds the gate.
+        // live ramp ever holds the gate. P4: same span as the ramp itself.
         val muteSettled = muteRampStartMs < 0L ||
-            SystemClock.elapsedRealtime() - muteRampStartMs >= BAIL_MS
+            SystemClock.elapsedRealtime() - muteRampStartMs >= muteRampSpanMs()
         // DJ reactive engine R3: a held handoff parks done until the deadline
         // — but never on a dead deck (B solo under a corpse session is a
         // hang, not a hold) and never against the listener's own switch.
@@ -3200,19 +3343,30 @@ class CrossfadeController(
 
     /** Ramps the outgoing track away rather than cutting it, so an interruption has no click in it. */
     /**
-     * DJ end-click fix: ramps the outgoing dry gain to zero over BAIL_MS from
-     * whatever it holds when the mute cutoff first trips (unity under
-     * level-ride), instead of the old one-tick 1->0 snap. fallGain lands with
-     * zero slope, same as the bail ramp. Called after the rides every tick so
-     * it wins; idempotent per transition via [muteRampStartMs].
+     * DJ end-click fix: ramps the outgoing dry gain to zero over the mute
+     * span from whatever it holds when the mute cutoff first trips (unity
+     * under level-ride), instead of the old one-tick 1->0 snap. fallGain
+     * lands with zero slope, same as the bail ramp. Called after the rides
+     * every tick so it wins; idempotent per transition via [muteRampStartMs].
+     * P4: long blends get a 250 ms ramp (the 120 ms origin window reads as
+     * a suck at full loudness on a 16 s+ bed); cuts keep 120 ms.
      */
+    private fun muteRampSpanMs(): Long =
+        if (render.mixset &&
+            (render.style == TransitionStyle.DJ_BLEND || render.style == TransitionStyle.DJ_FILTER)
+        ) {
+            250L
+        } else {
+            BAIL_MS
+        }
+
     private fun muteRampGain(current: Float): Float {
         val now = SystemClock.elapsedRealtime()
         if (muteRampStartMs < 0L) {
             muteRampStartMs = now
             muteFromGain = current
         }
-        val t = ((now - muteRampStartMs).toFloat() / BAIL_MS).coerceIn(0f, 1f)
+        val t = ((now - muteRampStartMs).toFloat() / muteRampSpanMs()).coerceIn(0f, 1f)
         return muteFromGain * fallGain(t)
     }
 
@@ -3392,6 +3546,15 @@ class CrossfadeController(
                 // paper, but every sink call is a chance for the platform to
                 // do work at full volume.
                 if (it.volume < 0.999f) it.volume = 1f
+                // P3 landing sub-reset: the incoming deck stands alone now,
+                // so its filter snaps open (wet→dry with the room, bass back
+                // at full). The processor glides to the target, so the snap
+                // never clicks; the sweep's resonance was already parked by
+                // the rides. Skip when a bail just opened everything above
+                // (deckRateReset path voices its own settle).
+                if (wasDj && !deckRateReset) {
+                    filters.incoming(TransitionFilterProcessor.OPEN_HZ, 20f)
+                }
                 // Undoes whatever [begin] stacked on for a beatmatched handoff —
                 // speed AND pitch. setPlaybackSpeed would leave a shifted pitch
                 // behind to leak into the next track, so both reset together.
@@ -3524,6 +3687,8 @@ class CrossfadeController(
         outgoing = null
         incoming = null
         handedOff = false
+        // P0: back to IDLE — the next arm snapshots its own pair.
+        armedPairKey = null
         queuedItemCount = 0
         incomingCueTimeMs = 0L
         incomingPlaybackRate = 1.0
@@ -3619,9 +3784,10 @@ class CrossfadeController(
         // flap the mids.
         updateLiveVocalFlags(outProgress, inProgress)
         // Single analyzer-driven vocal gate (mirrors MixConductor recipe rule):
-        // ARM flags + force choke + live recompute, once per tick, plus the
-        // planned overlap so a sung bed can't slip through silent.
-        val duck = render.duckAMids || render.forceDuckKeys || liveDuckA > 0.5f || liveDuckLatchedA
+        // ARM flags + force choke + the live sidechain envelopes, once per
+        // tick, plus the planned overlap so a sung bed can't slip through
+        // silent. P1: envelopes (>0.02 presence), never latches.
+        val duck = render.duckAMids || render.forceDuckKeys || duckA.env > 0.02f
         // Energy fix P1-1: forceDuckKeys no longer also forces B's delay. On the
         // flip (LOG) curve, forcing BOTH flags made the decks dip their mids in
         // the same progress window — combined audible mid bottomed at ~0.40
@@ -3629,10 +3795,10 @@ class CrossfadeController(
         // non-delay table while A clears the band: A yields, B fills, staggered.
         // B's volume there is still only ~0.45, so the early rise reads as a
         // clean handoff, not mud.
-        val delay = render.delayBMids || liveDelayB > 0.5f || liveDelayLatchedB
-        // Trace vocals (0.10+) now gate: analyzer masks under-report on
-        // dense masters, and 0.20 let sung beds slip through silent.
-        val vocalGate = duck || delay || render.vocalOverlap > 0.1
+        val delay = render.delayBMids || duckB.env > 0.02f
+        // P2: single trace threshold 0.12, aligned with the choke — one
+        // number decides "vocally dirty" everywhere below the recipe.
+        val vocalGate = duck || delay || render.vocalOverlap > 0.12
         // Energy fix P0-1: voice the schedules off the GATED progress, not the
         // raw tick. heavyClash holds A and delays B (outgoingHoldSec /
         // incomingStartDelaySec); on raw progress its EQ handed the bass off at
@@ -3689,21 +3855,27 @@ class CrossfadeController(
         // the old vocal is down to ~1/4 instead of ~1/2, so the mud never
         // forms; and the incoming mids/highs layer in over the first ~30%
         // instead of arriving full (DJ brings the new track in by layers).
-        // delay already folds forceDuckKeys + liveDelayB; don't double-count.
+        // delay already folds forceDuckKeys + the B follower; don't double-count.
         val incomingSings = delay
-        // HARD_DUEL: both choruses firing on a 16 s+ bed (vocalOverlap>0.4,
+        // HARD_DUEL: both choruses firing on a long bed (vocalOverlap>0.25,
         // not trace) — the complementary carve below is not enough, so the
         // old vocal gets killed early and hard while the new one enters
         // thinned. DJ-only by construction (rideEq never runs for stock).
+        // P2: gate opened 0.4→0.25 — a 0.3 overlap is still two choruses.
         val hardDuel = render.mixRecipe == MixRecipe.VOCAL_DUEL &&
-            longBed && render.vocalOverlap > 0.4
+            longBed && render.vocalOverlap > 0.25
         // Real-DJ long blend: keep warmth — B layers in over 0.35 bed
         // per minimal 10% steps, not 0.50, so body arrives before mid hole.
         // HARD_DUEL stretches the layering (0.50) from a near-closed door
         // (0.15): the new vocal earns the band instead of arriving in it.
         val entrySpan = if (hardDuel) 0.50f else if (longBed) 0.35f else 0.30f
         val entryT = (progress / entrySpan).coerceIn(0f, 1f)
-        val entryFloor = if (hardDuel) 0.15f else 0.40f
+        // P2: sung long beds enter thinned (0.30) — the new vocal earns the
+        // band instead of arriving in it. hardDuel keeps the near-closed
+        // door (0.15); short blends keep the plain entry (0.40).
+        val entryFloor = if (hardDuel) 0.15f
+            else if (longBed && vocalGate) 0.30f
+            else 0.40f
         val entryRamp = (entryFloor + (1f - entryFloor) * (entryT * entryT * (3f - 2f * entryT)))
             .coerceIn(entryFloor, 1f)
         // DJ-literature key rule: long blends expose tonal conflict more
@@ -3721,8 +3893,10 @@ class CrossfadeController(
             !vocalGate -> 0f
             hardDuel -> 0.35f
             keyClash -> 0.7f
-            render.keyScore >= 0.75 -> 0.35f
-            else -> 0.5f
+            // P2: deepened — 0.35 kept A at ~79% mid against a singing B
+            // (unison, not takeover). -6 dB-class carve on compatible keys.
+            render.keyScore >= 0.75 -> 0.55f
+            else -> 0.6f
         }
         // Sparkle owner: the hotter deck earns the highs first (DJ lets the
         // fresh/hotter track announce with hats and air). Blend-wide energy
@@ -3771,12 +3945,16 @@ class CrossfadeController(
             } else if (longBed && vocalGate) {
                 // Mid-swap: the outgoing vocal owns its band until the
                 // downbeat-snapped bass swap fires, then yields across the
-                // back of the blend. No snap machine of its own — it rides
-                // the swap's fire event, so mids and bass hand over on the
-                // same downbeat. Without a swap event (table-driven type)
-                // the yield runs from the blend start instead.
+                // back of the blend. P2: no 1.0 unity lock pre-swap — the
+                // tables already voice the planned duck, and holding unity
+                // until a late swap is the double-vocal window. The yield
+                // runs from blend start; the swap event re-bases the curve
+                // below, so mids still complete the handover on the swap
+                // downbeat. Without a swap event (table-driven type) the
+                // yield runs from the blend start instead.
                 if (swapAt.isFinite() && !eqSwapFired) {
-                    1f
+                    val lin = ((0.85f - outProgress) / 0.85f).coerceIn(0f, 1f)
+                    lin * lin
                 } else {
                     val s = if (swapAt.isFinite()) eqSwapStartProgress else 0f
                     val lin = ((0.85f - outProgress) / (0.85f - s).coerceAtLeast(0.05f)).coerceIn(0f, 1f)
@@ -3801,13 +3979,23 @@ class CrossfadeController(
             val propHigh = 1f - (carveK + if (keyClash) 0.15f else 0f).coerceAtMost(0.9f) * bSing
             val outMid = (out.mid * ownership * propMid) *
                 (if (longBed && vocalGate) 1f - sumMid * inMid.coerceIn(0f, 1f) else 1f)
+            // P1 sidechain mid carve (-4 dB max): the outgoing band yields to
+            // the LIVE vocal, cross-scaled by the incoming deck's arrival —
+            // a solo A vocal never carves itself, and the carve breathes
+            // with the crossfade instead of latching.
+            val aYieldMid = duckA.env * inProgress.coerceIn(0f, 1f)
+            val outMidCarved = outMid * (1f - duckMidDepth * aYieldMid)
             val outHigh = (out.high * ownership * propHigh) *
                 (if (longBed && vocalGate) 1f - sumHigh * highIn.coerceIn(0f, 1f) else 1f)
             // B's defer lives here because only this path knows ownership.
             bDefer = 1f - 0.5f * liveSingA.coerceIn(0f, 1f) * ownership.coerceIn(0f, 1f)
-            eqFilters.outgoing(lowOut, outMid, outHigh)
+            eqFilters.outgoing(lowOut, outMidCarved, outHigh)
         }
-        val inMidFinal = inMid * (if (vocalGate) bDefer else 1f)
+        val inMidFinal = inMid * (if (vocalGate) bDefer else 1f) *
+            // P1 mirror: the incoming band yields to B's OWN live vocal
+            // while A is still audible — the new vocal waits its turn on the
+            // way in, symmetric with A's carve on the way out.
+            (1f - duckMidDepth * duckB.env * (1f - outProgress).coerceIn(0f, 1f))
         lastInLow = lowIn
         lastInMid = inMidFinal
         lastInHigh = highIn
@@ -3824,7 +4012,16 @@ class CrossfadeController(
      */
     private fun rideDjSend(progress: Float) {
         if (render.echoThrow && render.echoAmount > 0.0 && render.echoBeatSeconds > 0.0) {
-            val attack = ((progress - 0.55f) / 0.15f).coerceIn(0f, 1f)
+            // P3 convergence: on long beds the throw arms earlier (from 0.35,
+            // inaudible) so space is already in the room before the last
+            // phrase — short blends keep the punchy 0.55 attack.
+            val attackStart = if (render.overlapSeconds >= 16.0) 0.35f else 0.55f
+            val attack = ((progress - attackStart) / (0.70f - attackStart)).coerceIn(0f, 1f)
+            // P3: the echo fraction shortens toward the drop (beat → half
+            // beat past 0.8) — the tail hurries instead of smearing across
+            // the landing.
+            val beatSec = render.echoBeatSeconds.toFloat() *
+                if (progress > 0.8f) 0.5f else 1f
             // DJ-literature landing: the dub tail must clear before the drop
             // — decay the send into the cut on backspin plans so only the
             // residual rings under B instead of a full wet tail. Blend throws
@@ -3834,11 +4031,48 @@ class CrossfadeController(
             } else {
                 1f
             }
-            echoFilters.outgoing((render.echoAmount * attack * release).toFloat(), render.echoBeatSeconds.toFloat())
+            echoFilters.outgoing((render.echoAmount * attack * release).toFloat(), beatSec)
         }
         if (!render.echoThrow && render.reverbAmount > 0.0) {
             val bloom = (progress * 2f).coerceIn(0f, 1f)
             reverbFilters.outgoing((render.reverbAmount * bloom).toFloat(), false)
+        }
+    }
+
+    /**
+     * P3 convergence stack: on long DJ_BLEND beds the outgoing deck's last
+     * phrase tightens 2→1→½ beats (a live CDJ roll, no samples) and
+     * releases over the final beat — rhythmic acceleration toward the
+     * handoff with zero BPM change. Instrumental-only: both sidechain
+     * followers must read near-silence, or the roll would chop words. The
+     * loop route is its own bus; filters/EQ/sends are untouched.
+     */
+    private fun rideFxStack(progress: Float) {
+        val beatSec = render.eqSwapBeatSec.toFloat()
+        val overlapSec = render.overlapSeconds.toFloat()
+        val armed = render.mixset && smartFadeActive &&
+            render.style == TransitionStyle.DJ_BLEND &&
+            overlapSec >= 16f && beatSec > 0f &&
+            duckA.env < 0.25f && duckB.env < 0.25f &&
+            !render.brake && !render.backspin
+        if (!armed) {
+            if (lastLoopBeats != 0f && lastLoopBeats != -1f) {
+                loopVamps.open()
+                lastLoopBeats = 0f
+            }
+            return
+        }
+        val remainingBeats = (1f - progress) * overlapSec / beatSec
+        val loopBeats = when {
+            remainingBeats > 8f -> 0f
+            remainingBeats > 4f -> 2f
+            remainingBeats > 2f -> 1f
+            remainingBeats > 1f -> 0.5f
+            else -> 0f
+        }
+        if (loopBeats != lastLoopBeats && beatSec > 0f) {
+            lastLoopBeats = loopBeats
+            loopVamps.outgoing(loopBeats, beatSec)
         }
     }
 
@@ -4598,8 +4832,9 @@ class CrossfadeController(
          * A frozen incoming EQ glides back to unity over this long, stepped
          * in tick() through the existing incoming() target — same wall-clock
          * order as the throw/reverb closes, inaudible as a move.
+         * P4: 150→220 ms — the shorter glide breathed against the handoff.
          */
-        const val EQ_OPEN_MS = 150L
+        const val EQ_OPEN_MS = 220L
 
         /**
          * A dead-A post-handoff ramps B to full over this long before done
