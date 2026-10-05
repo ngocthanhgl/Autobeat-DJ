@@ -13,7 +13,7 @@ import kotlin.math.max
  * - Each deck's gains are keyframes; [at] interpolates linearly between them.
  * - LOW on a swap type (SMOOTH, HARMONIC, FILTER_SWEEP, HALF_TIME_BLEND) is a
  *   placeholder: the controller's bass-swap state machine owns the LOW band
- *   there ([BASS_SWAP_PROGRESS], fired on a downbeat), because only it knows
+ *   there (armed by the controller on a downbeat), because only it knows
  *   when the swap actually fired. Table-driven types (ECHO, LOOP, DISSOLVE)
  *   carry their real LOW keyframes below.
  * - `duckAMids` / `delayBMids` are the spec's ARM-time vocal flags. When false
@@ -31,19 +31,18 @@ object EqSchedule {
     private data class Key(val progress: Float, val gains: EqGains)
 
     /**
-     * Bass-swap arm progress per transition type (spec §Bass swap timing).
-     * Null = no downbeat swap; the LOW band comes from the tables instead.
-     * Satisfaction round: swap fires early so bass arrives BEFORE B is dominant.
+     * Rewrite Phase 2: the fixed progress-fraction table is deleted. The swap
+     * fires on a musical event (the controller arms the first outgoing
+     * downbeat at/after the incoming phrase arrival). This predicate only
+     * says WHICH types swap on a downbeat at all; null = no schedule swap
+     * and the LOW band comes from the tables instead.
      */
-    val BASS_SWAP_PROGRESS: Map<TransitionType, Float> = mapOf(
-        TransitionType.SMOOTH_CROSSFADE to 0.42f,
-        TransitionType.HARMONIC_BLEND    to 0.40f,
-        TransitionType.FILTER_SWEEP      to 0.30f,
-        TransitionType.HALF_TIME_BLEND   to 0.20f,
-        // Booth octave blend: the swap lands mid-window on the phrase "1",
-        // like any beat-locked blend.
-        TransitionType.OCTAVE_BLEND      to 0.50f,
-    )
+    fun swapsOnDownbeat(type: TransitionType): Boolean =
+        type == TransitionType.SMOOTH_CROSSFADE ||
+            type == TransitionType.HARMONIC_BLEND ||
+            type == TransitionType.FILTER_SWEEP ||
+            type == TransitionType.HALF_TIME_BLEND ||
+            type == TransitionType.OCTAVE_BLEND
 
     /**
      * Swap duration in bars. 1 bar (4 beats at eqSwapBeatSec): the LOW

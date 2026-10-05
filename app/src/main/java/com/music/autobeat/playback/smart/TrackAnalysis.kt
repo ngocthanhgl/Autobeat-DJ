@@ -155,6 +155,31 @@ data class TrackAnalysis(
      */
     val plainCutBreathSec: Double? = null,
     /**
+     * Rewrite Phase 0: true musical phrase starts in seconds — novelty peaks
+     * on the beat-synchronous energy envelope snapped to the downbeat grid
+     * with a 4-bar minimum unit (Rekordbox convention: real boundaries are
+     * multiples of 4 bars). Interior boundaries only; empty = undetected.
+     * Persisted; computed once in [TrackAnalyzer.detectPhrases].
+     */
+    val phraseStarts: List<Double> = emptyList(),
+    /**
+     * Rewrite Phase 0: first sustained vocal activity and last vocal activity
+     * in seconds, read off the merged vocal mask. Null = no vocal evidence.
+     * The planner uses these as clash vetoes (never start a blend inside the
+     * outgoing vocal tail, never land the handoff inside the incoming vocal
+     * entry) — never as a word-level timeline. Persisted.
+     */
+    val firstVocalSec: Double? = null,
+    val lastVocalSec: Double? = null,
+    /**
+     * Rewrite Phase 0: true only when the whole-track downbeat grid holds a
+     * steady bar length (median bar deviation under 3% with enough bars).
+     * False = drifting/live/rubato or unmeasured — the planner then refuses
+     * long phrase-locked blends and falls back to short overlaps or cuts.
+     * Persisted; computed once in [TrackAnalyzer.measureTempoStability].
+     */
+    val tempoStable: Boolean = false,
+    /**
      * Full-audit P0.2: true when this result came from the head-only pass —
      * the curve/mask below cover the opening window only, not the track.
      * The outgoing side needs tail evidence (mix-out, clash windows), so a

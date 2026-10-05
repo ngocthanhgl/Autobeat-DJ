@@ -1507,6 +1507,21 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         // here, while they are still in memory. The store keeps only the
         // outputs; the curves are released with `features` below.
         val structure = detectStructure(features, mergedDownbeats, effectiveDuration)
+        // Rewrite Phase 0: phrase grid from beat-synchronous novelty, vocal
+        // span from the merged mask, tempo stability from the merged grid.
+        // All wrapped: a detector throw must never take down the analysis.
+        val mergedMask = mergeMasks(features.energyCurve.size, head?.vocalMask, tail?.vocalMask)
+            ?: features.vocalActivityMask
+        val phrases = runCatching { detectPhrases(features, mergedDownbeats, effectiveDuration) }
+            .onFailure { TrackLog.w(TAG, "detectPhrases failed; no phrase grid", it) }
+            .getOrDefault(emptyList())
+        val vocalSpan = runCatching { vocalSpan(mergedMask, features.energyCurve) }
+            .onFailure { TrackLog.w(TAG, "vocalSpan failed; no vocal span", it) }
+            .getOrNull()
+        val stable = runCatching {
+            measureTempoStability(mergedDownbeats, leading?.beatInterval ?: features.beatInterval)
+        }.onFailure { TrackLog.w(TAG, "measureTempoStability failed; distrusting grid", it) }
+            .getOrDefault(false)
 
         triedRenditions.add(copy.key)
         // Null-safe: local files have no rendition copy. The count is kept
@@ -1553,6 +1568,10 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                 vocalActivityMask = mergeMasks(features.energyCurve.size, head?.vocalMask, tail?.vocalMask)
                     ?: features.vocalActivityMask,
                 vocalProbability = features.vocalProbability,
+                phraseStarts = phrases,
+                firstVocalSec = vocalSpan?.first,
+                lastVocalSec = vocalSpan?.second,
+                tempoStable = stable,
                 // Full-plan P4: master descriptors ride the whole-track pass.
                 loudnessLufs = features.loudnessLufs,
                 peakDbfs = features.peakDbfs,
@@ -1741,6 +1760,121 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         if (bestStart < 0) return null
         val lookahead = if (beatInterval.isFinite() && beatInterval > 0) beatInterval else 0.5
         return (bestStart + lookahead).takeIf { it.isFinite() && it < duration }
+    }
+
+    /**
+     * Rewrite Phase 0: true phrase starts from beat-synchronous novelty.
+     * Per-bar energy and onset density are compared across a 4-bar past /
+     * 4-bar future window (checkerboard intuition on the cheap); local maxima
+     * become boundaries, greedily spaced at least 4 bars apart and snapped to
+     * the downbeat grid by construction. Relative gate only (0.35 x max) so
+     * flat arrangements yield few or no phrases instead of false ones. Pure.
+     */
+    private fun detectPhrases(
+        features: TrackFeatures.Features,
+        downbeats: List<Double>,
+        duration: Double,
+    ): List<Double> {
+        val fine = features.energyCurveFine.filter { it.time.isFinite() && it.energy.isFinite() }
+        val onsets = features.onsetTimes.filter { it.isFinite() }.sorted()
+        val bars = downbeats.filter { it.isFinite() && it >= 0 && it <= duration }
+        if (bars.size < 9 || fine.size < 8) return emptyList()
+        val barEnergy = DoubleArray(bars.size - 1)
+        val barOnsets = IntArray(bars.size - 1)
+        var fi = 0
+        var oi = 0
+        for (b in barEnergy.indices) {
+            val end = bars[b + 1]
+            var e = 0.0
+            var n = 0
+            while (fi < fine.size && fine[fi].time < end) {
+                if (fine[fi].time >= bars[b]) { e += fine[fi].energy; n++ }
+                fi++
+            }
+            barEnergy[b] = if (n > 0) e / n else 0.0
+            var c = 0
+            while (oi < onsets.size && onsets[oi] < end) {
+                if (onsets[oi] >= bars[b]) c++
+                oi++
+            }
+            barOnsets[b] = c
+        }
+        val meanAll = barEnergy.average().takeIf { it > 0 } ?: return emptyList()
+        val meanOnset = barOnsets.average()
+        val scores = DoubleArray(barEnergy.size)
+        for (j in 4 until barEnergy.size - 4) {
+            val past = (j - 4 until j).sumOf { barEnergy[it] } / 4.0
+            val future = (j until j + 4).sumOf { barEnergy[it] } / 4.0
+            val pastOn = (j - 4 until j).sumOf { barOnsets[it] } / 4.0
+            val futureOn = (j until j + 4).sumOf { barOnsets[it] } / 4.0
+            val energyTerm = abs(future - past) / meanAll
+            val onsetTerm = if (meanOnset > 0) 0.5 * abs(futureOn - pastOn) / meanOnset else 0.0
+            scores[j] = energyTerm + onsetTerm
+        }
+        val maxScore = scores.maxOrNull() ?: return emptyList()
+        if (maxScore <= 0) return emptyList()
+        val gate = 0.35 * maxScore
+        val picked = mutableListOf<Int>()
+        for (j in scores.indices.sortedByDescending { scores[it] }) {
+            if (scores[j] < gate) break
+            var isMax = true
+            for (k in maxOf(0, j - 2)..minOf(scores.size - 1, j + 2)) {
+                if (scores[k] > scores[j]) { isMax = false; break }
+            }
+            if (!isMax) continue
+            if (picked.any { abs(it - j) < 4 }) continue
+            picked.add(j)
+        }
+        return picked.sorted().map { bars[it] }
+    }
+
+    /**
+     * Rewrite Phase 0: first/last sustained vocal activity from the merged
+     * mask. Sustained = two consecutive buckets at or above the vocal-active
+     * gate, so an isolated noisy bucket does not become a veto. Times come
+     * from the energy-curve samples the mask is indexed against. Pure.
+     */
+    private fun vocalSpan(
+        mask: List<Double>,
+        times: List<EnergySample>,
+    ): Pair<Double, Double>? {
+        if (mask.isEmpty() || mask.size != times.size) return null
+        var first = -1
+        for (i in 0 until mask.size - 1) {
+            if (mask[i] >= 0.6 && mask[i + 1] >= 0.6) { first = i; break }
+        }
+        if (first < 0) return null
+        var last = -1
+        for (i in mask.size - 1 downTo 1) {
+            if (mask[i] >= 0.6 && mask[i - 1] >= 0.6) { last = i; break }
+        }
+        if (last < 0) return null
+        val t0 = times[first].time
+        val t1 = times[last].time
+        if (!t0.isFinite() || !t1.isFinite() || t1 < t0) return null
+        return t0 to t1
+    }
+
+    /**
+     * Rewrite Phase 0: true when the downbeat grid holds a steady bar
+     * length — median bar deviation under 3% of the expected 4-beat bar.
+     * Needs at least 8 bars; fewer bars or an invalid interval reads as
+     * unstable (distrust is the safe default). Pure.
+     */
+    private fun measureTempoStability(downbeats: List<Double>, beatInterval: Double): Boolean {
+        val clean = downbeats.filter { it.isFinite() }.sorted()
+        if (clean.size < 9) return false
+        val bars = (0 until clean.size - 1).map { clean[it + 1] - clean[it] }.filter { it > 0 }
+        if (bars.size < 8) return false
+        val expected = if (beatInterval.isFinite() && beatInterval > 0) {
+            4.0 * beatInterval
+        } else {
+            bars.sorted()[bars.size / 2]
+        }
+        if (expected <= 0) return false
+        val sorted = bars.map { abs(it - expected) / expected }.sorted()
+        val median = sorted[sorted.size / 2]
+        return median < 0.03
     }
 
     /**

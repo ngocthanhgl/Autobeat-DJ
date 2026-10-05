@@ -29,6 +29,7 @@ import com.music.autobeat.playback.smart.TransitionStyle
 import com.music.autobeat.playback.smart.TransitionTrackInfo
 import com.music.autobeat.playback.smart.TransitionType
 import com.music.autobeat.playback.smart.EqSchedule
+import com.music.autobeat.playback.smart.snapToBeatGrid
 import com.music.autobeat.playback.smart.VolumeCurve
 import com.music.autobeat.playback.smart.planTransition
 import com.music.autobeat.playback.smart.vocalActivityBetween
@@ -117,14 +118,11 @@ private fun dropCutFireAt(
         else firstVocalStartSec(next, cueSec, cueSec + overlapSec))
         ?.takeIf { it.isFinite() } ?: return null
     if (dropAt < cueSec + 0.3 * overlapSec || dropAt > cueSec + 0.92 * overlapSec) return null
+    // Rewrite Phase 3: the fire point shares the planner's beat-grid snap —
+    // one quantization for every cut in the system.
+    val fireAt: Double = snapToBeatGrid(dropAt, next)
     val beatSec: Double = next.beatInterval.takeIf { it > 0 }
         ?: next.bpm.takeIf { it > 0 }?.let { 60.0 / it } ?: 0.0
-    var fireAt: Double = dropAt
-    if (beatSec > 0 && next.downbeats.isNotEmpty()) {
-        next.downbeats.minByOrNull { abs(it - dropAt) }?.let { snap ->
-            if (abs(snap - dropAt) <= 2 * beatSec) fireAt = snap
-        }
-    }
     val lead: Double = if (beatSec > 0) beatSec.coerceIn(0.25, 1.0) else 0.5
     return (fireAt - lead).coerceAtLeast(cueSec)
 }
@@ -1826,22 +1824,40 @@ class CrossfadeController(
                     ?.let { it >= VOCAL_ACTIVE_THRESHOLD } ?: false
             }
         } ?: false
-        // DJ-EQ spec §Bass swap protocol: arm at the type's progress, fire on
-        // the next downbeat after it. Pre-snapped here (grids are ARM-time
-        // data); the fade only compares progress against it.
-        val swapProgress = EqSchedule.BASS_SWAP_PROGRESS[plan.type]
+        // Rewrite Phase 2: the swap fires on a musical event, never a fixed
+        // progress fraction. Target = the first outgoing downbeat at/after
+        // the incoming phrase arrival (incoming phrase start mapped onto
+        // outgoing time, ~1:1 at these rates). If the outgoing track vacates
+        // its own bass first (breakdown dip in the low curve), the first
+        // downbeat of the dip wins instead. Pre-snapped here (grids are
+        // ARM-time data); the fade only compares progress against it.
         // DJ independent: no schedule snap when DJ off (+Inf), so the
-        // legacy SVF bass swap below runs. DJ Mode keeps the downbeat snap.
-        val eqSwapFireProgress = if (mixset && swapProgress != null && plan.fadeSeconds > 0) {
-            // Real-DJ long blend: the bass swap fires on the phrase "1"
-            // (16-bar grid), not an arbitrary downbeat — ears expect the
-            // low-end handoff on a structural boundary.
-            val beatSec = currentAnalysis?.beatInterval?.takeIf { it > 0 } ?: 0.0
-            val ideal = plan.transitionStart + swapProgress * plan.fadeSeconds
-            val snap = currentAnalysis?.let { a ->
-                phrase16Grid(a).firstOrNull { it > ideal }
-                    ?: a.downbeats.firstOrNull { it > ideal }
-            } ?: if (beatSec > 0) ideal + beatSec else ideal
+        // legacy SVF bass swap below runs.
+        val eqSwapFireProgress = if (mixset && EqSchedule.swapsOnDownbeat(plan.type) && plan.fadeSeconds > 0) {
+            val outBeats = currentAnalysis?.downbeats.orEmpty().filter { it.isFinite() }
+            val inPhraseStart = nextAnalysis?.phraseStarts.orEmpty()
+                .filter { it.isFinite() }
+                .firstOrNull { it >= plan.incomingCueTime }
+                ?: plan.incomingCueTime
+            val arrival = plan.transitionStart + (inPhraseStart - plan.incomingCueTime)
+            val barMin = plan.transitionStart +
+                (currentAnalysis?.beatInterval?.takeIf { it > 0 } ?: 0.5)
+            val dipAt = currentAnalysis?.lowEnergyCurve?.let { curve ->
+                val mean = curve.filter { it.energy.isFinite() }
+                    .map { it.energy }.average()
+                if (!mean.isFinite() || mean <= 0) {
+                    null
+                } else {
+                    curve.firstOrNull {
+                        it.time.isFinite() && it.energy.isFinite() &&
+                            it.time >= barMin && it.time <= arrival &&
+                            it.energy < 0.5 * mean
+                    }?.time?.let { d -> outBeats.firstOrNull { it >= d } }
+                }
+            }
+            val snap = dipAt
+                ?: outBeats.firstOrNull { it >= max(arrival, barMin) }
+                ?: (plan.transitionStart + plan.fadeSeconds / 2.0)
             ((snap - plan.transitionStart) / plan.fadeSeconds).toFloat().coerceIn(0f, 1f)
         } else {
             Float.POSITIVE_INFINITY
@@ -1893,6 +1909,23 @@ class CrossfadeController(
             forceDuck = plan.forceDuckKeys,
             vocalOverlap = plan.vocalOverlap,
             dropConfidence = nextAnalysis?.dropConfidence,
+        )
+        // Rewrite Phase 3: one line per armed transition — phrase window,
+        // swap event, vocal verdict — so the session log shows what the DJ
+        // actually did instead of a silent blend.
+        val swapAtSec = if (eqSwapFireProgress.isFinite()) {
+            plan.transitionStart + eqSwapFireProgress * plan.fadeSeconds
+        } else {
+            Double.NaN
+        }
+        TrackLog.d(
+            TAG,
+            "transition ${currentItem.mediaId}->${nextItem.mediaId} type=${plan.type} " +
+                "phrase=[${"%.2f".format(plan.transitionStart)}→" +
+                "${"%.2f".format(plan.transitionStart + plan.fadeSeconds)}] " +
+                "swap@${if (swapAtSec.isFinite()) "%.2f".format(swapAtSec) else "-"} " +
+                "vocalOverlap=${"%.2f".format(plan.vocalOverlap)} recipe=$mixRecipe",
+            null,
         )
         // F3 rotation: at most one effected blend per cooldown window
         // (DJ intensity). The planner is pure and cannot count

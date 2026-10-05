@@ -123,21 +123,6 @@ fun humanizePlan(
     var humanized = plan
     val notes = mutableListOf<String>()
 
-    // R1a: overlap ±2 outgoing beats, clamped to planner-plausible rails.
-    // Skipped on loop voices (lengths already armed into the vamp schedule).
-    if (isBlend && outBeatSec != null && draws.fadeDeltaBeats != 0) {
-        val before = humanized.fadeSeconds
-        val nudged = (before + draws.fadeDeltaBeats * outBeatSec)
-            .coerceIn(maxOf(2.0, before * 0.6), minOf(40.0, before * 1.4))
-        if (nudged != before) {
-            humanized = humanized.copy(
-                fadeSeconds = nudged,
-                transitionEnd = humanized.transitionStart + nudged,
-                overlapSeconds = nudged,
-            )
-            notes += "fade ${"%.1f".format(before)}→${"%.1f".format(nudged)}"
-        }
-    }
     // R1b: rate push/pull, ±0.15 % — a DJ leaning on the pitch, inaudible as
     // pitch, felt as life. Inside the DJ ±2 % rails by two orders of magnitude.
     // Blends only: loop voices keep the planner's exact cue/rate geometry.
@@ -145,15 +130,6 @@ fun humanizePlan(
         val before = humanized.incomingPlaybackRate
         humanized = humanized.copy(incomingPlaybackRate = before * (1.0 + draws.rateDelta))
         notes += "rate ×${"%.4f".format(1.0 + draws.rateDelta)}"
-    }
-    // R1c: cue to the nearest downbeat within ±1 beat. Blends only.
-    if (isBlend && draws.cueSnap && outBeatSec != null && next != null) {
-        val snapped = snapCueToGrid(humanized.incomingCueTime, next, outBeatSec)
-        if (snapped != null && snapped != humanized.incomingCueTime) {
-            val drift = snapped - humanized.incomingCueTime
-            humanized = humanized.copy(incomingCueTime = snapped)
-            notes += "cue ${"%+.2f".format(drift)}"
-        }
     }
     // R1d: effect intensities — scale what the planner armed, never arm here
     // (arming is the wildcard's job).
@@ -168,11 +144,6 @@ fun humanizePlan(
     if (humanized.filterSweep != 0.0 && draws.sweepScale != 1.0) {
         humanized = humanized.copy(filterSweep = humanized.filterSweep * draws.sweepScale)
         notes += "sweep ×${"%.2f".format(draws.sweepScale)}"
-    }
-    if (isBlend && draws.swapDelta != 0.0) {
-        humanized = humanized.copy(
-            bassSwapFraction = (humanized.bassSwapFraction + draws.swapDelta).coerceIn(0.5, 0.9),
-        )
     }
 
     // R2: the wildcard. Within-type arms only — same voice, one unplanned
@@ -233,14 +204,18 @@ private fun rollDraws(
     pairKey: String,
 ): HumanDraws {
     val rng = Random(pairKey.hashCode() * 31 + st.mixes * 0x9E3779B9.toInt())
+    // Rewrite Phase 2: the musically-blind nudges are disabled — fade length,
+    // cue snap and swap offset now come from phrase/downbeat events, and a
+    // random ±0.08 on the swap only ever moved it off the "1". Wet/echo
+    // character draws and wildcards stay (wildcards fire on phrase starts).
     return HumanDraws(
-        fadeDeltaBeats = if (outBeatSec != null) rng.nextInt(-2, 3) else 0,
+        fadeDeltaBeats = 0,
         rateDelta = (rng.nextDouble() - 0.5) * 0.003,
-        cueSnap = rng.nextDouble() < 0.70,
+        cueSnap = false,
         echoScale = 0.7 + rng.nextDouble() * 0.5,
         reverbScale = 0.7 + rng.nextDouble() * 0.5,
         sweepScale = 0.8 + rng.nextDouble() * 0.45,
-        swapDelta = (rng.nextDouble() - 0.5) * 0.16,
+        swapDelta = 0.0,
         wildcard = rollWildcard(plan, out, next, outBeatSec, st, rng),
         // The hand: one decisive pull most plays, a re-grabbed stutter on
         // some — pair-stable like every other draw.
@@ -283,22 +258,3 @@ private fun rollWildcard(
     return move
 }
 
-/**
- * Nearest incoming downbeat within ±1 grid beat of [cue], or null when the
- * grid gives nothing there. Smallest possible tasteful move: the cue lands
- * on a phrase edge instead of a beat off it.
- */
-fun snapCueToGrid(cue: Double, next: TrackAnalysis, beatSec: Double): Double? {
-    if (!cue.isFinite() || next.downbeats.isEmpty()) return null
-    var best: Double? = null
-    var bestDist = beatSec
-    for (downbeat in next.downbeats) {
-        if (!downbeat.isFinite()) continue
-        val dist = abs(downbeat - cue)
-        if (dist < bestDist) {
-            bestDist = dist
-            best = downbeat
-        }
-    }
-    return best
-}

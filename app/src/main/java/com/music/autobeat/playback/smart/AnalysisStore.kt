@@ -180,6 +180,11 @@ class AnalysisStore(private val context: Context) {
     val buildupFootSec: Double? = null,
     val buildupSpanSec: Double? = null,
     val buildupRise: Double? = null,
+    // Rewrite Phase 0: phrase grid + vocal span + tempo stability.
+    val phraseStarts: List<Double> = emptyList(),
+    val firstVocalSec: Double? = null,
+    val lastVocalSec: Double? = null,
+    val tempoStable: Boolean = false,
 ) {
         fun toAnalysis(trackId: String) = TrackAnalysis(
             status = TrackAnalysis.STATUS_READY,
@@ -222,6 +227,10 @@ class AnalysisStore(private val context: Context) {
     buildupFootSec = buildupFootSec,
     buildupSpanSec = buildupSpanSec,
     buildupRise = buildupRise,
+    phraseStarts = phraseStarts,
+    firstVocalSec = firstVocalSec,
+    lastVocalSec = lastVocalSec,
+    tempoStable = tempoStable,
 )
 
         companion object {
@@ -264,6 +273,10 @@ class AnalysisStore(private val context: Context) {
         buildupFootSec = analysis.buildupFootSec?.let(::round),
         buildupSpanSec = analysis.buildupSpanSec?.let(::round),
         buildupRise = analysis.buildupRise,
+        phraseStarts = analysis.phraseStarts.map(::round),
+        firstVocalSec = analysis.firstVocalSec?.let(::round),
+        lastVocalSec = analysis.lastVocalSec?.let(::round),
+        tempoStable = analysis.tempoStable,
     )
 }
     }
@@ -310,7 +323,7 @@ class AnalysisStore(private val context: Context) {
          * re-analysis costs seconds, and a beat grid interpreted under the wrong
          * assumptions is silently wrong for the life of the file.
          */
-        const val SCHEMA_VERSION = 6
+        const val SCHEMA_VERSION = 7
 
         /** A few thousand tracks' worth, at tens of kilobytes each. */
         const val MAX_ENTRIES = 2_000
