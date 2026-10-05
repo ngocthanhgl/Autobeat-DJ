@@ -1,9 +1,12 @@
 package com.music.autobeat.playback
 
+import android.os.Bundle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.session.MediaController
 import com.music.autobeat.data.TrackLog
 import com.music.autobeat.data.settings.AppSettings
 import com.music.autobeat.playback.smart.TrackAnalysis
@@ -57,9 +60,11 @@ import kotlin.math.log2
  * Tracks already measured —
  * this session or a previous one, via the analysis store — cost nothing.
  *
- * AutoPlay's tracks are sorted among themselves and stay below the ones the
- * user queued, for the same reason they do under a shuffle: a sort is not a
- * reason for a mix to start cutting in front of the album.
+ * An AutoPlay track that has been measured earns its place in the chain:
+ * the sort runs over one combined section and the flag is cleared on
+ * measured AutoPlay tracks, so they stand above the heading with the queue.
+ * Unmeasured AutoPlay tracks stay flagged below it. (A shuffle keeps the
+ * sections apart; a sort is a reason to cut in front.)
  *
  * Not persisted across restarts: the pre-sort order only exists in memory, so
  * there is nothing truthful to restore to after one. The sorted order itself
@@ -578,8 +583,14 @@ object HarmonicSort {
      *
      * Only tracks from the measured scope move, and only among the slots they
      * already hold: everything beyond the scope, anything queued or dragged
-     * since, and anything unmeasurable stays exactly where it is. The user and
-     * AutoPlay sections sort separately so suggestions stay below the queue.
+     * since, and anything unmeasurable stays exactly where it is. User and
+     * AutoPlay tracks sort as one section; a measured AutoPlay track has its
+     * flag cleared so the heading drops below it, while unmeasured
+     * suggestions keep theirs and stay under the heading.
+     *
+     * The flag clear is one-way for the session: [restore] puts the ids back
+     * but does not re-flag, so a promoted track keeps standing with the
+     * queue after the sort is toggled off.
      */
     private fun sortAndApply(player: Player, deps: Deps, scopeIds: List<String>) {
         val from = player.currentMediaItemIndex + 1
@@ -616,10 +627,25 @@ object HarmonicSort {
         // median, so a smooth climb wins and a sawtooth pays per octave.
         val anchorBpm = anchor?.bpm?.takeIf { it > 0 } ?: 0.0
         val scopeBpms = analyses.values.mapNotNull { it.bpm.takeIf { b -> b > 0 } }
-        val (mixSlots, ownSlots) = sortableSlots.partition { upcoming[it].fromAutoplay }
-        val sortedOwn = sortSection(ownSlots.map { upcoming[it] }, analyses, energies, anchor, vibe, anchorBpm, scopeBpms)
-        val mixAnchor = sortedOwn.lastOrNull()?.let { analyses[it.mediaId] }?.takeIf { it.isUsable } ?: anchor
-        val sorted = sortedOwn + sortSection(mixSlots.map { upcoming[it] }, analyses, energies, mixAnchor, vibe, anchorBpm, scopeBpms)
+        // One combined section: a measured AutoPlay track belongs wherever
+        // the chain puts it, not fenced below a heading.
+        val sorted = sortSection(
+            sortableSlots.map { upcoming[it] }, analyses, energies, anchor, vibe, anchorBpm, scopeBpms,
+        )
+        // Promote what the sort just measured: clear the flag on AutoPlay
+        // tracks with a usable analysis so the heading drops below them.
+        // Unmeasured suggestions keep the flag and stay under the heading.
+        // Session-player only: items read back through a controller have no
+        // playback URI left, so a controller-side replace would strip them
+        // (see QueueShuffle.applyOrder). Order-only fallback there.
+        if (player !is MediaController) {
+            sortableSlots.forEach { slot ->
+                val item = upcoming[slot]
+                if (item.fromAutoplay && analyses[item.mediaId]?.isUsable == true) {
+                    player.replaceMediaItem(from + slot, item.withAutoplayCleared())
+                }
+            }
+        }
         // Back into slots: each sorted track takes the slot its predecessor in
         // the sorted order vacated, so non-scope tracks never shift.
         val positions = HashMap<String, ArrayDeque<Int>>(sortableSlots.size)
@@ -631,6 +657,20 @@ object HarmonicSort {
         }
         TrackLog.d("Autobeat", "harmonic sort placed ${sorted.size} of ${upcoming.size} upcoming", null)
         QueueShuffle.applyFromSession(player, from, order)
+    }
+
+    /**
+     * Same track, no longer AutoPlay's: drops [EXTRA_FROM_AUTOPLAY] from the
+     * extras while keeping id, URI and everything else, so the queue heading
+     * ([autoplaySectionStart]) falls below it. Built from the session's own
+     * item, never a controller's — see the call site.
+     */
+    private fun MediaItem.withAutoplayCleared(): MediaItem {
+        val extras = (mediaMetadata.extras?.deepCopy() ?: Bundle()).apply {
+            remove(EXTRA_FROM_AUTOPLAY)
+        }
+        val metadata = MediaMetadata.Builder(mediaMetadata).setExtras(extras).build()
+        return buildUpon().setMediaMetadata(metadata).build()
     }
 
     /**

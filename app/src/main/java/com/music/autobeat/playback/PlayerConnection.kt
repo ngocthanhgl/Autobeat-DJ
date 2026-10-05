@@ -333,7 +333,8 @@ val MediaItem.fromAutoplay: Boolean
  * MediaItem so it survives the trip through the session — the queue belongs to
  * the player, and the UI only ever sees it back through a MediaController.
  */
-private const val EXTRA_FROM_AUTOPLAY = "Autobeat.fromAutoplay"
+/** Read by Harmonic Sort to clear the flag on measured tracks it promotes. */
+internal const val EXTRA_FROM_AUTOPLAY = "Autobeat.fromAutoplay"
 
 /** @see Song.radioName */
 private const val EXTRA_RADIO_NAME = "Autobeat.radioName"

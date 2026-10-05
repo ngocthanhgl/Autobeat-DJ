@@ -929,6 +929,23 @@ class PlaybackService : MediaLibraryService() {
                 // item transition to run the ordinary refill path, so give the
                 // still-enabled empty queue another chance here.
                 refreshAutoplayIfQueueEmpty()
+                // The refill above only appends: an already-ended player stays
+                // ended. Watch the refill job and start the first appended
+                // track, so the mix continues instead of stopping dead at the
+                // tail. Every condition is re-checked after the wait, so a
+                // user action in between simply no-ops this.
+                scope.launch {
+                    runCatching { autoplayLoadJob?.join() }
+                    val p = player ?: return@launch
+                    if (!AppSettings.autoplay.value) return@launch
+                    if (p.playbackState == Player.STATE_ENDED &&
+                        p.currentMediaItemIndex >= 0 &&
+                        p.currentMediaItemIndex + 1 < p.mediaItemCount
+                    ) {
+                        p.seekTo(p.currentMediaItemIndex + 1, 0)
+                        p.play()
+                    }
+                }
             }
         }
 
@@ -1866,7 +1883,8 @@ class PlaybackService : MediaLibraryService() {
         autoplaySeed = current.videoId
         autoplayLoadJob = scope.launch {
             var remaining = needed
-            var emptyRefreshesRemaining = MAX_AUTOPLAY_EMPTY_REFRESHES
+            var quickRetriesRemaining = MAX_AUTOPLAY_EMPTY_REFRESHES
+            var starvedRoundsRemaining = MAX_AUTOPLAY_STARVED_ROUNDS
             while (isActive) {
                 val activePlayer = player ?: return@launch
                 if (!AppSettings.autoplay.value ||
@@ -1875,22 +1893,7 @@ class PlaybackService : MediaLibraryService() {
                 ) {
                     return@launch
                 }
-                val queueSongs = (0 until activePlayer.mediaItemCount)
-                    .map { activePlayer.getMediaItemAt(it).toSong() }
-                val existing = if (AppSettings.dontRepeatSuggestions.value) {
-                    queueSongs + sessionSongHistory
-                } else {
-                    queueSongs
-                }
-                val result = loadAutoplayTracks(existing, current, remaining)
-                val resolved = result.getOrElse {
-                    TrackLog.w(
-                        "Autobeat",
-                        "notification autoplay failed: ${it.message}",
-                        about = current.videoId,
-                    )
-                    emptyList()
-                }
+                val resolved = fetchAutoplayBatch(activePlayer, current, remaining)
                 val latestPlayer = player ?: return@launch
                 if (!AppSettings.autoplay.value ||
                     latestPlayer.repeatMode == Player.REPEAT_MODE_ALL ||
@@ -1904,19 +1907,73 @@ class PlaybackService : MediaLibraryService() {
                     return@launch
                 }
 
-                // Empty and failed responses used to leave [autoplaySeed]
-                // latched to this track, suppressing every later callback and
-                // leaving AutoPlay visibly on with no queue. While the current
-                // item is genuinely the end of the queue, make a delayed fresh
-                // request. Keep it bounded: a radio with no usable unique songs
-                // must not turn into a permanent background polling loop.
+                // Empty: this seed's neighbourhood is saturated (or the radio
+                // failed). Off the tail the next track change re-arms with a
+                // fresh seed, so stop here...
                 val at = latestPlayer.currentMediaItemIndex
                 if (at < 0 || at != latestPlayer.mediaItemCount - 1) return@launch
-                if (emptyRefreshesRemaining-- <= 0) return@launch
-                delay(AUTOPLAY_EMPTY_REFRESH_DELAY_MS)
+                // ...but at the tail with nothing ahead nobody is coming: one
+                // quick retry for the transient case, then slow starved rounds
+                // (each success extends the seed chain further out) until the
+                // track changes and this job dies with it.
+                val ahead = (at + 1 until latestPlayer.mediaItemCount)
+                    .count { latestPlayer.getMediaItemAt(it).fromAutoplay }
+                if (ahead > 0) return@launch
+                if (quickRetriesRemaining-- > 0) {
+                    delay(AUTOPLAY_EMPTY_REFRESH_DELAY_MS)
+                    remaining = MAX_QUEUED_AUTOPLAY
+                    continue
+                }
+                if (starvedRoundsRemaining-- <= 0) return@launch
+                delay(AUTOPLAY_STARVED_RETRY_DELAY_MS)
                 remaining = MAX_QUEUED_AUTOPLAY
             }
         }
+    }
+
+    /**
+     * One AutoPlay batch with a seed chain: the current track first, then up
+     * to [AUTOPLAY_SEED_CHAIN_DEPTH] of the tail's own autoplay tracks, newest
+     * first — so a saturated neighbourhood walks outward instead of coming
+     * back empty. Returns the first non-empty batch, or empty when every seed
+     * is exhausted or fails.
+     */
+    private suspend fun fetchAutoplayBatch(
+        activePlayer: Player,
+        seedSong: Song,
+        limit: Int,
+    ): List<Song> {
+        val tried = mutableSetOf<String>()
+        val seen = mutableSetOf(seedSong.videoId)
+        val seeds = mutableListOf(seedSong)
+        for (index in activePlayer.mediaItemCount - 1 downTo activePlayer.currentMediaItemIndex + 1) {
+            if (seeds.size >= AUTOPLAY_SEED_CHAIN_DEPTH + 1) break
+            val item = activePlayer.getMediaItemAt(index)
+            if (!item.fromAutoplay) continue
+            val song = item.toSong()
+            if (!seen.add(song.videoId)) continue
+            seeds += song
+        }
+        for (seed in seeds) {
+            if (!tried.add(seed.videoId)) continue
+            val queueSongs = (0 until activePlayer.mediaItemCount)
+                .map { activePlayer.getMediaItemAt(it).toSong() }
+            val existing = if (AppSettings.dontRepeatSuggestions.value) {
+                queueSongs + sessionSongHistory
+            } else {
+                queueSongs
+            }
+            val batch = loadAutoplayTracks(existing, seed, limit).getOrElse {
+                TrackLog.w(
+                    "Autobeat",
+                    "notification autoplay failed: ${it.message}",
+                    about = seed.videoId,
+                )
+                emptyList()
+            }
+            if (batch.isNotEmpty()) return batch
+        }
+        return emptyList()
     }
 
     /** Re-arms AutoPlay when an external queue edit exposes an empty tail. */
@@ -6792,5 +6849,19 @@ class PlaybackService : MediaLibraryService() {
 
         /** One fresh request is the fallback; normal track/queue changes re-arm it. */
         const val MAX_AUTOPLAY_EMPTY_REFRESHES = 1
+
+        /** How many autoplay tracks seed the next fetch when the current seed is exhausted. */
+        const val AUTOPLAY_SEED_CHAIN_DEPTH = 3
+
+        /**
+         * While the tail is starving (nothing queued ahead and the current
+         * seed — plus its chain — yields nothing new), the refill job waits
+         * this long between rounds instead of latching dead. The job still
+         * dies with the track, so this never becomes a permanent poll.
+         */
+        const val AUTOPLAY_STARVED_RETRY_DELAY_MS = 30_000L
+
+        /** Starved rounds before one track's refill job gives up for good. */
+        const val MAX_AUTOPLAY_STARVED_ROUNDS = 10
     }
 }
