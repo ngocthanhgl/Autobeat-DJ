@@ -645,6 +645,8 @@ class PlaybackService : MediaLibraryService() {
     /** Logical queue request, before a video id is replaced by its audio counterpart. */
     private var preferredPrefetchRequest: Pair<Boolean, List<String>>? = null
     private var autoplaySeed: String? = null
+    /** Set when the frontier drifted: the next batch seeds from the playing track once, then resumes the tail. */
+    private var autoplayDriftResetPending = false
 
     /** Index in the live queue represented by entry zero of the persisted window. */
     private var persistedQueueStart = 0
@@ -1932,22 +1934,62 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
-     * One AutoPlay batch with a seed chain: the current track first, then up
-     * to [AUTOPLAY_SEED_CHAIN_DEPTH] of the tail's own autoplay tracks, newest
-     * first — so a saturated neighbourhood walks outward instead of coming
-     * back empty. Returns the first non-empty batch, or empty when every seed
-     * is exhausted or fails.
+     * One AutoPlay batch, seeded from the frontier: the last measured track
+     * scanning back from the tail while Harmonic Sort runs (the chain's true
+     * end), else the tail's own newest autoplay track, so each batch
+     * continues the key/tempo walk instead of clustering around the playing
+     * track. The playing track stays first fallback, then the chain walks
+     * further out ([AUTOPLAY_SEED_CHAIN_DEPTH] deep). Returns the first
+     * non-empty batch, or empty when every seed is exhausted or fails.
+     *
+     * Drift anchor: when the frontier seed is measured and has walked too
+     * far from the playing track ([HarmonicSort.isDrifted]), the next batch
+     * re-anchors on the playing track once ([autoplayDriftResetPending]),
+     * then resumes the tail.
      */
     private suspend fun fetchAutoplayBatch(
         activePlayer: Player,
-        seedSong: Song,
+        current: Song,
         limit: Int,
     ): List<Song> {
+        fun songOf(id: String): Song? =
+            (0 until activePlayer.mediaItemCount)
+                .map { activePlayer.getMediaItemAt(it) }
+                .firstOrNull { it.mediaId == id }
+                ?.toSong()
+        val tailSong: Song? =
+            (activePlayer.mediaItemCount - 1 downTo activePlayer.currentMediaItemIndex + 1)
+                .map { activePlayer.getMediaItemAt(it) }
+                .firstOrNull { it.fromAutoplay }
+                ?.toSong()
+        val measuredId: String? =
+            if (HarmonicSort.isActive) {
+                HarmonicSort.frontierSeedId(activePlayer, trackAnalyzer::analysisFor)
+            } else {
+                null
+            }
+        val reset = autoplayDriftResetPending
+        autoplayDriftResetPending = false
+        val primary: Song = when {
+            reset -> current
+            measuredId != null -> songOf(measuredId) ?: tailSong ?: current
+            else -> tailSong ?: current
+        }
+        val frontier = when {
+            reset -> "reset"
+            measuredId != null && primary.videoId == measuredId -> "measured"
+            tailSong != null && primary.videoId == tailSong.videoId -> "tail"
+            else -> "current"
+        }
         val tried = mutableSetOf<String>()
-        val seen = mutableSetOf(seedSong.videoId)
-        val seeds = mutableListOf(seedSong)
+        val seen = mutableSetOf(primary.videoId)
+        val seeds = mutableListOf(primary)
+        if (primary.videoId != current.videoId) {
+            seeds += current
+            seen += current.videoId
+        }
         for (index in activePlayer.mediaItemCount - 1 downTo activePlayer.currentMediaItemIndex + 1) {
-            if (seeds.size >= AUTOPLAY_SEED_CHAIN_DEPTH + 1) break
+            if (seeds.size >= AUTOPLAY_SEED_CHAIN_DEPTH + 2) break
             val item = activePlayer.getMediaItemAt(index)
             if (!item.fromAutoplay) continue
             val song = item.toSong()
@@ -1971,8 +2013,25 @@ class PlaybackService : MediaLibraryService() {
                 )
                 emptyList()
             }
-            if (batch.isNotEmpty()) return batch
+            if (batch.isNotEmpty()) {
+                val seedAnalysis = trackAnalyzer.analysisFor(seed.videoId)
+                val currentAnalysis = trackAnalyzer.analysisFor(current.videoId)
+                val drifted = seedAnalysis.isUsable && currentAnalysis.isUsable &&
+                    HarmonicSort.isDrifted(seedAnalysis, currentAnalysis, AUTOPLAY_DRIFT_TEMPO_PCT)
+                if (drifted) autoplayDriftResetPending = true
+                TrackLog.d(
+                    "Autobeat",
+                    "autoplay seed=${seed.videoId} frontier=$frontier drift=$drifted batch=${batch.size}",
+                    about = current.videoId,
+                )
+                return batch
+            }
         }
+        TrackLog.d(
+            "Autobeat",
+            "autoplay seed=${primary.videoId} frontier=$frontier drift=false batch=0 (all seeds exhausted)",
+            about = current.videoId,
+        )
         return emptyList()
     }
 
@@ -6863,5 +6922,8 @@ class PlaybackService : MediaLibraryService() {
 
         /** Starved rounds before one track's refill job gives up for good. */
         const val MAX_AUTOPLAY_STARVED_ROUNDS = 10
+
+        /** Frontier tempo drift allowed before a batch re-anchors on the playing track. */
+        const val AUTOPLAY_DRIFT_TEMPO_PCT = 0.08
     }
 }

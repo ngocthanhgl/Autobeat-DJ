@@ -660,6 +660,39 @@ object HarmonicSort {
     }
 
     /**
+     * The frontier the next AutoPlay batch should continue: the last
+     * measured-and-usable track scanning back from the tail. Seeding the
+     * radio from here (instead of the playing track) grows the chain where
+     * it stands, so key and tempo walk instead of jumping.
+     */
+    fun frontierSeedId(player: Player, analysisFor: (String) -> TrackAnalysis?): String? {
+        for (i in player.mediaItemCount - 1 downTo (player.currentMediaItemIndex + 1).coerceAtLeast(0)) {
+            val id = player.getMediaItemAt(i).mediaId
+            if (analysisFor(id)?.isUsable == true) return id
+        }
+        return null
+    }
+
+    /**
+     * True when the frontier [seed] has walked too far from [current]: a
+     * different wheel neighbourhood (more than one Camelot step, or a
+     * major/minor flip) or a tempo beyond [tempoPct]. Either side
+     * unmeasured abstains — no evidence, no drift call.
+     */
+    fun isDrifted(seed: TrackAnalysis, current: TrackAnalysis, tempoPct: Double): Boolean {
+        if (seed.key.isNotEmpty() && current.key.isNotEmpty()) {
+            val s = camelotOf(seed.key) ?: return false
+            val c = camelotOf(current.key) ?: return false
+            val step = abs(s.first - c.first).let { minOf(it, 12 - it) }
+            if (step > 1 || s.second != c.second) return true
+        }
+        if (seed.bpm > 0 && current.bpm > 0) {
+            if (abs(seed.bpm - current.bpm) / current.bpm > tempoPct) return true
+        }
+        return false
+    }
+
+    /**
      * Same track, no longer AutoPlay's: drops [EXTRA_FROM_AUTOPLAY] from the
      * extras while keeping id, URI and everything else, so the queue heading
      * ([autoplaySectionStart]) falls below it. Built from the session's own
