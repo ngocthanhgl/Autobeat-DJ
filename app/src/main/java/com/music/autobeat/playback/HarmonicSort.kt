@@ -3,7 +3,6 @@ package com.music.autobeat.playback
 import android.os.Bundle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
@@ -702,7 +701,7 @@ object HarmonicSort {
         val extras = (mediaMetadata.extras?.deepCopy() ?: Bundle()).apply {
             remove(EXTRA_FROM_AUTOPLAY)
         }
-        val metadata = MediaMetadata.Builder(mediaMetadata).setExtras(extras).build()
+        val metadata = mediaMetadata.buildUpon().setExtras(extras).build()
         return buildUpon().setMediaMetadata(metadata).build()
     }
 
