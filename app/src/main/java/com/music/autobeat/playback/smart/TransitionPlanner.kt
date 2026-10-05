@@ -201,9 +201,24 @@ private fun vocalCoversWindow(a: TrackAnalysis, windowStart: Double, windowEnd: 
         ?.let { it >= VOCAL_ACTIVE_THRESHOLD } ?: false
 }
 
-private fun hasVocalEvidence(a: TrackAnalysis): Boolean =
-    a.vocalActivityMask.isNotEmpty() ||
-        a.firstVocalSec != null || a.lastVocalSec != null
+/**
+ * D5: whether the mask actually speaks. A span is evidence; a mask is
+ * evidence only when some bucket takes a position — hot vocal (≥ gate) or
+ * affirmatively clean (≤ [MASK_CLEAN_CEILING]). A mask that only shrugs
+ * (every bucket near neutral: unmeasured fill, diluted ad-lib, uncertain
+ * detector) is NOT evidence, so its side can never read "clear" below —
+ * unknown leans cut/delay, exactly like the evidenceless rule the doc
+ * already promised but the old isNotEmpty() check never delivered.
+ */
+private fun hasVocalEvidence(a: TrackAnalysis): Boolean {
+    if (a.firstVocalSec != null || a.lastVocalSec != null) return true
+    val mask = a.vocalActivityMask
+    if (mask.isEmpty()) return false
+    return mask.any { it.isFinite() && (it >= VOCAL_ACTIVE_THRESHOLD || it <= MASK_CLEAN_CEILING) }
+}
+
+/** D5: at or below this, a mask bucket affirmatively reports "no vocal". */
+private const val MASK_CLEAN_CEILING = 0.4
 
 /**
  * Cut/wash predicate for a blend window: true (prefer the cut/wash family)

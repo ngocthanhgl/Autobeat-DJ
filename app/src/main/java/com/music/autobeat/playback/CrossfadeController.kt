@@ -731,6 +731,27 @@ class CrossfadeController(
     /** P1: max mid-carve depth, -4 dB. See rideEq cross-scaling. */
     private val duckMidDepth = 0.37f
     /**
+     * D2: maps a live dB-over-floor reading onto the follower's 0..1 peak
+     * scale. +3 dB (just above the exit hysteresis) reads 0, +6 dB (enter)
+     * reads 1 — the live override only ever ADDS heat on top of the mask
+     * prior, never subtracts (a hot mask with a cool meter keeps its peak).
+     */
+    private fun meterPeak(dbOverFloor: Float?): Double {
+        if (dbOverFloor == null) return 0.0
+        return ((dbOverFloor - 3f) / 3f).toDouble().coerceIn(0.0, 1.0)
+    }
+    /**
+     * D4 duel escalation: wall-clock when the live envelopes first stayed
+     * above half, 0 when cool. A BED earns the hard-duel verdict after
+     * [DUEL_ESCALATE_MS] of sustained heat. Rearmed in begin().
+     */
+    private var duelHotSinceMs = 0L
+    private var liveDuelLogged = false
+    /** D4: sustained live heat that earns the cubic kill mid-fade. */
+    private val liveDuel: Boolean
+        get() = duelHotSinceMs > 0L &&
+            SystemClock.elapsedRealtime() - duelHotSinceMs >= DUEL_ESCALATE_MS
+    /**
      * P3 landing vacuum: a 150 ms hole in the outgoing deck just before the
      * handoff — silence-before-impact so the incoming track lands as a
      * restart, not a layer. Armed once per fade at outProgress 0.97;
@@ -777,10 +798,36 @@ class CrossfadeController(
     }
 
     /**
+     * Peak mask activity over [start]..[end] track seconds, or null without
+     * evidence. Same windowing contract as [maskActivity], but the max
+     * instead of the mean: a 1-2 bucket ad-lib stab that the trailing mean
+     * dilutes below the engage gate still lights the peak, so the follower
+     * attacks on the stab instead of sleeping through it. Mean stays the
+     * density signal (liveSingA/B); peak is only the engage trigger.
+     */
+    private fun maskPeak(times: DoubleArray, mask: DoubleArray, start: Double, end: Double): Double? {
+        if (times.size != mask.size || times.isEmpty() || end <= start) return null
+        var peak: Double? = null
+        for (i in times.indices) {
+            val t = times[i]
+            if (!t.isFinite() || t < start || t > end) continue
+            val v = mask[i]
+            if (!v.isFinite()) continue
+            if (peak == null || v > peak) peak = v
+        }
+        return peak
+    }
+
+    /**
      * Slides a 2 s vocal window over both decks as the blend travels and
      * steps each deck's sidechain follower toward what it sees. Silence when
      * ungated (empty snapshot = no evidence, never a block) or when the
      * overlap is unknown.
+     *
+     * D1: the followers step on the window PEAK, not the mean — a short
+     * ad-lib over an instrumental dilutes to ~0.55 in the mean (deadband:
+     * never engages cold) while its hot bucket still reads 0.8+. Mean
+     * remains the density signal; peak is only the trigger.
      */
     private fun updateLiveVocalFlags(outProgress: Float, inProgress: Float) {
         val overlap = render.overlapSeconds
@@ -796,13 +843,42 @@ class CrossfadeController(
             ?: 0.0
         val bMean = maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow - 2.0, bNow)
             ?: 0.0
+        // D1: engage triggers read the peak so a 1-2 bucket ad-lib stab
+        // attacks even when the mean sits in the hysteresis deadband.
+        val aPeak = maskPeak(render.outgoingVocalTimes, render.outgoingVocalMask, aNow - 2.0, aNow)
+            ?: 0.0
+        val bPeak = maskPeak(render.incomingVocalTimes, render.incomingVocalMask, bNow - 2.0, bNow)
+            ?: 0.0
         // Continuous density for the proportional carve (no evidence reads
         // 0.0 — silence, never a block, same contract as maskActivity).
         liveSingA = aMean.toFloat().coerceIn(0f, 1f)
         liveSingB = bMean.toFloat().coerceIn(0f, 1f)
         // P1: envelopes follow the room down as well as up — no latch.
-        val envA = duckA.step(aMean, now, dtMs)
-        val envB = duckB.step(bMean, now, dtMs)
+        // D2: mask evidence is the prior; the live voice-band meter overrides.
+        // Pre-handoff the outgoing track sits on the session deck and the
+        // incoming on the spare; post-handoff they swap (fields follow the
+        // players). dB-over-floor maps +3 dB -> 0.0, +6 dB -> 1.0 — a buried
+        // ad-lib the mask scored 0.4 still reads hot when its 1-4 kHz band
+        // rides 6 dB over its own floor. Stale/absent meter reads 0 (mask).
+        val aLiveDb = eqFilters.voiceDbOverFloor(sessionDeck = !handedOff)
+        val bLiveDb = eqFilters.voiceDbOverFloor(sessionDeck = handedOff)
+        val aPeakFused = maxOf(aPeak, meterPeak(aLiveDb))
+        val bPeakFused = maxOf(bPeak, meterPeak(bLiveDb))
+        val envA = duckA.step(aPeakFused, now, dtMs)
+        val envB = duckB.step(bPeakFused, now, dtMs)
+        // D4: sustained live heat escalates the duel verdict — a BED that
+        // starts singing mid-fade earns the cubic kill after 2 s above half
+        // envelope, instead of the polite quadratic forever.
+        val hot = maxOf(envA, envB) > 0.5f
+        if (hot) {
+            if (duelHotSinceMs <= 0L) duelHotSinceMs = now
+            if (!liveDuelLogged && now - duelHotSinceMs >= DUEL_ESCALATE_MS) {
+                liveDuelLogged = true
+                TrackLog.d(TAG, "live duel escalated mid-blend (duckA=$envA delayB=$envB)")
+            }
+        } else {
+            duelHotSinceMs = 0L
+        }
         // Full-audit P2 C2: leave a trace when the live path engages beyond
         // the ARM flags — once per fade, like the span-cap log.
         if (!liveVocalLogged && (envA > 0.5f || envB > 0.5f)) {
@@ -2479,6 +2555,9 @@ class CrossfadeController(
         liveSingB = 0f
         lastVocalSlewAt = 0L
         liveVocalLogged = false
+        // D4: duel escalation re-armed.
+        duelHotSinceMs = 0L
+        liveDuelLogged = false
         reactCutNow = false
         reactHoldUntilMs = 0L
         reactCutFired = false
@@ -3004,14 +3083,15 @@ class CrossfadeController(
             }
             out.volume = (1f - diveDepth * 0.6f) * duelPad
         }
-        // P1 sidechain broadband: up to -5 dB per deck, cross-scaled by the
-        // other deck's audibility — a solo vocal never ducks itself, and the
-        // duck breathes with the crossfade instead of latching. Applied once
-        // here, downstream of every curve and the level ride, so the mute
-        // disposal below still wins. DJ-only: stock gains run untouched.
+        // P1 sidechain broadband: up to -5 dB per deck. A scales by B's
+        // audibility (inProgress) — a solo vocal never ducks itself. D3: B
+        // scales by its OWN audibility (inProgress), not A's remainder —
+        // the old (1-outProgress) mirror muted late B ad-libs to ~1 dB.
+        // Applied once here, downstream of every curve and the level ride,
+        // so the mute disposal below still wins. DJ-only: stock untouched.
         if (render.mixset && smartFadeActive) {
             val aYieldVol = duckA.env * inProgress.coerceIn(0f, 1f)
-            val bYieldVol = duckB.env * (1f - outProgress).coerceIn(0f, 1f)
+            val bYieldVol = duckB.env * inProgress.coerceIn(0f, 1f)
             if (aYieldVol > 0.005f) out.volume = out.volume * (1f - duckVolDepth * aYieldVol)
             if (bYieldVol > 0.005f) player.volume = player.volume * (1f - duckVolDepth * bYieldVol)
         }
@@ -3862,8 +3942,10 @@ class CrossfadeController(
         // old vocal gets killed early and hard while the new one enters
         // thinned. DJ-only by construction (rideEq never runs for stock).
         // P2: gate opened 0.4→0.25 — a 0.3 overlap is still two choruses.
-        val hardDuel = render.mixRecipe == MixRecipe.VOCAL_DUEL &&
-            longBed && render.vocalOverlap > 0.25
+        // D4: sustained live heat escalates mid-fade — a BED that starts
+        // singing earns the cubic kill without waiting for the ARM verdict.
+        val hardDuel = longBed &&
+            (render.mixRecipe == MixRecipe.VOCAL_DUEL && render.vocalOverlap > 0.25 || liveDuel)
         // Real-DJ long blend: keep warmth — B layers in over 0.35 bed
         // per minimal 10% steps, not 0.50, so body arrives before mid hole.
         // HARD_DUEL stretches the layering (0.50) from a near-closed door
@@ -3992,10 +4074,10 @@ class CrossfadeController(
             eqFilters.outgoing(lowOut, outMidCarved, outHigh)
         }
         val inMidFinal = inMid * (if (vocalGate) bDefer else 1f) *
-            // P1 mirror: the incoming band yields to B's OWN live vocal
-            // while A is still audible — the new vocal waits its turn on the
-            // way in, symmetric with A's carve on the way out.
-            (1f - duckMidDepth * duckB.env * (1f - outProgress).coerceIn(0f, 1f))
+            // P1 mirror: the incoming band yields to B's OWN live vocal,
+            // scaled by B's own audibility (D3: inProgress, not A's
+            // remainder) — a late B ad-lib keeps its full carve.
+            (1f - duckMidDepth * duckB.env * inProgress.coerceIn(0f, 1f))
         lastInLow = lowIn
         lastInMid = inMidFinal
         lastInHigh = highIn
@@ -4523,8 +4605,9 @@ class CrossfadeController(
         val amount = render.vocalOverlap.coerceIn(0.0, 1.0)
         // HARD_DUEL shares rideEq's gate (both choruses, 16 s+ bed): the
         // filter goes with the EQ — deeper floor, higher entry corner.
-        val hardDuel = render.mixset && render.mixRecipe == MixRecipe.VOCAL_DUEL &&
-            render.overlapSeconds >= 16.0 && render.vocalOverlap > 0.4
+        // D4: same live escalation as rideEq — a singing BED earns it too.
+        val hardDuel = render.mixset && render.overlapSeconds >= 16.0 &&
+            (render.mixRecipe == MixRecipe.VOCAL_DUEL && render.vocalOverlap > 0.4 || liveDuel)
         // Long-blend floor: analyzer masks under-report on dense masters, so
         // a "voiceless" 16 s+ bed still stacks two full-range decks through
         // the middle third. A 0.25 floor keeps gentle complementary filtering
@@ -4835,6 +4918,13 @@ class CrossfadeController(
          * P4: 150→220 ms — the shorter glide breathed against the handoff.
          */
         const val EQ_OPEN_MS = 220L
+
+        /**
+         * D4: live envelopes above half for this long escalate a singing
+         * BED to the hard-duel verdict mid-fade — two sustained choruses,
+         * not a passing ad-lib, earn the cubic kill.
+         */
+        const val DUEL_ESCALATE_MS = 2000L
 
         /**
          * A dead-A post-handoff ramps B to full over this long before done

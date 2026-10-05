@@ -1,6 +1,7 @@
 package com.music.autobeat.playback
 
 import com.music.autobeat.data.TrackLog
+import android.os.SystemClock
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
@@ -8,8 +9,10 @@ import androidx.media3.common.util.UnstableApi
 import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.log10
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * The 3-band DJ EQ a track rides through a Automix transition: LOW (< 200 Hz),
@@ -67,6 +70,27 @@ class DJBandEQ : BaseAudioProcessor() {
     private var smoothMid = 1f
     private var smoothHigh = 1f
 
+    /**
+     * D2 live voice-band meter: RMS of the PRE-GAIN mid band (250–4000 Hz,
+     * the voice core) accumulated per buffer, with an adaptive floor that
+     * falls fast and rises slow — so the reading is dB OVER THE TRACK's own
+     * floor, never an absolute level. Pre-gain deliberately: the meter must
+     * not see our own ducking (feedback loop). Written on the audio thread,
+     * read on the fade-tick thread — volatiles are enough (single words).
+     * Stale (> [METER_FRESH_MS]) means the chain routed around us (float
+     * output) or the deck is silent: readers treat it as absent, mask only.
+     */
+    @Volatile
+    var voiceDbOverFloor = 0f
+        private set
+
+    @Volatile
+    var lastMeterUptimeMs = 0L
+        private set
+
+    private var meterFloor = 0f
+    private var meterFloorSet = false
+
     private var channelCount = 0
 
     /**
@@ -103,6 +127,33 @@ class DJBandEQ : BaseAudioProcessor() {
     /** Parks all bands at unity. Glided, not snapped — see the class doc. */
     fun open() = setGains(1f, 1f, 1f)
 
+    /**
+     * Folds one buffer's pre-gain mid-band energy into the adaptive floor
+     * and publishes dB-over-floor. Call once per queueInput with the
+     * accumulated sum of squares and sample count.
+     */
+    private fun meterVoice(sumSq: Double, count: Int) {
+        if (count <= 0) return
+        val rms = sqrt(sumSq / count).toFloat()
+        if (!meterFloorSet || rms < meterFloor) {
+            // Fast down: a drop to a quieter section re-anchors immediately.
+            meterFloor = if (!meterFloorSet) rms else meterFloor + METER_FLOOR_DOWN * (rms - meterFloor)
+            meterFloorSet = true
+        } else {
+            // Slow up: a loud chorus must not drag the floor up with it.
+            meterFloor += METER_FLOOR_UP * (rms - meterFloor)
+        }
+        val floor = meterFloor.coerceAtLeast(METER_EPS)
+        voiceDbOverFloor = (20f * log10((rms / floor).coerceAtLeast(METER_EPS))).coerceIn(0f, 30f)
+        lastMeterUptimeMs = SystemClock.elapsedRealtime()
+    }
+
+    /** Fresh meter, or null when the chain routed around us / deck silent. */
+    fun liveVoiceDb(): Float? {
+        val age = SystemClock.elapsedRealtime() - lastMeterUptimeMs
+        return if (meterFloorSet && age <= METER_FRESH_MS) voiceDbOverFloor else null
+    }
+
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount < 1) {
             TrackLog.w(
@@ -131,6 +182,9 @@ class DJBandEQ : BaseAudioProcessor() {
         lowStateB.fill(0f)
         highState.fill(0f)
         highStateB.fill(0f)
+        // A flush means a seek or a fresh source: the floor belongs to the
+        // old audio, so it re-anchors on the next buffer.
+        meterFloorSet = false
         // Snapped, not glided: a flush means a seek or a fresh source, so there
         // is no continuous signal for a glide to be continuous with.
         smoothLow = targetLow
@@ -146,6 +200,7 @@ class DJBandEQ : BaseAudioProcessor() {
         lowStateB = FloatArray(0)
         highState = FloatArray(0)
         highStateB = FloatArray(0)
+        meterFloorSet = false
     }
 
     override fun queueInput(inputBuffer: java.nio.ByteBuffer) {
@@ -173,6 +228,8 @@ class DJBandEQ : BaseAudioProcessor() {
             // biquads and keeps re-engage continuous.
             inputBuffer.mark()
             inputBuffer.order(ByteOrder.nativeOrder())
+            var parkedMidSq = 0.0
+            var parkedMidCount = 0
             repeat(frameCount) {
                 for (channel in 0 until channelCount) {
                     val sample = inputBuffer.short.toFloat() / SHORT_SCALE
@@ -181,9 +238,12 @@ class DJBandEQ : BaseAudioProcessor() {
                     val low = processLP(lowStateB, base, lowB0, lowB1, lowB2, lowA1, lowA2, low1)
                     val rest = sample - low
                     val mid1 = processLP(highState, base, highB0, highB1, highB2, highA1, highA2, rest)
-                    processLP(highStateB, base, highB0, highB1, highB2, highA1, highA2, mid1)
+                    val mid = processLP(highStateB, base, highB0, highB1, highB2, highA1, highA2, mid1)
+                    parkedMidSq += (mid * mid).toDouble()
+                    parkedMidCount++
                 }
             }
+            meterVoice(parkedMidSq, parkedMidCount)
             inputBuffer.reset()
             outputBuffer.put(inputBuffer)
             outputBuffer.flip()
@@ -194,6 +254,8 @@ class DJBandEQ : BaseAudioProcessor() {
         outputBuffer.order(ByteOrder.nativeOrder())
 
         var remaining = frameCount
+        var meterSq = 0.0
+        var meterCount = 0
         while (remaining > 0) {
             val block = min(remaining, GLIDE_FRAMES)
             smoothLow += (wantLow - smoothLow) * GAIN_GLIDE_RATE
@@ -213,11 +275,16 @@ class DJBandEQ : BaseAudioProcessor() {
                     val mid1 = processLP(highState, base, highB0, highB1, highB2, highA1, highA2, rest)
                     val mid = processLP(highStateB, base, highB0, highB1, highB2, highA1, highA2, mid1)
                     val high = rest - mid
+                    // D2: pre-gain mid tap — before gMid multiplies, so the
+                    // meter never sees our own ducking (no feedback loop).
+                    meterSq += (mid * mid).toDouble()
+                    meterCount++
                     outputBuffer.putShort(clampToShort((low * gLow + mid * gMid + high * gHigh) * SHORT_SCALE))
                 }
             }
             remaining -= block
         }
+        meterVoice(meterSq, meterCount)
         outputBuffer.flip()
     }
 
@@ -290,6 +357,21 @@ class DJBandEQ : BaseAudioProcessor() {
         /** How close to unity counts as settled, so a glide terminates. */
         private const val SETTLED_GAIN = 0.001f
 
+        /** D2 meter: floor falls to a quieter section within a few buffers. */
+        private const val METER_FLOOR_DOWN = 0.3f
+
+        /** D2 meter: floor rises only slowly, a loud chorus can't drag it up. */
+        private const val METER_FLOOR_UP = 0.02f
+
+        /** D2 meter: guards log10 against digital silence. */
+        private const val METER_EPS = 1e-6f
+
+        /**
+         * D2 meter: older than this, the reading is absent (chain routed
+         * around us on float output, or the deck is silent) — mask only.
+         */
+        private const val METER_FRESH_MS = 500L
+
         /** Keeps the bilinear transform away from its pole at Nyquist. */
         private const val MAX_CUTOFF_FRACTION = 0.45f
     }
@@ -316,6 +398,17 @@ interface EqFilters {
         incoming(1f, 1f, 1f)
         outgoing(1f, 1f, 1f)
     }
+
+    /**
+     * D2 live voice-band level: dB of the pre-gain mid band over that deck's
+     * own adaptive floor, or null when the meter is stale (float chain,
+     * silent deck). Mask evidence stays the prior; live overrides. Default
+     * null so [None] and tests need no audio sink.
+     *
+     * @param sessionDeck true for the session player's deck, false for the
+     * spare — the controller maps decks to tracks via the handoff.
+     */
+    fun voiceDbOverFloor(sessionDeck: Boolean): Float? = null
 
     /** For callers with no audio sink to EQ — tests, and the default wiring. */
     object None : EqFilters {

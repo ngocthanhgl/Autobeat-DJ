@@ -1647,6 +1647,12 @@ class PlaybackService : MediaLibraryService() {
 
                 override fun outgoing(low: Float, mid: Float, high: Float) =
                     spareEq.setGains(low, mid, high)
+
+                // D2: activeEq always rides the session player's chain (the
+                // fields swap at handoff to follow the players), so the
+                // session deck's live voice level reads straight off it.
+                override fun voiceDbOverFloor(sessionDeck: Boolean): Float? =
+                    (if (sessionDeck) activeEq else spareEq).liveVoiceDb()
             },
             // Full-plan loudness: aimed from begin(), which runs BEFORE the
             // handoff — so the roles here are the pre-handoff ones: the
