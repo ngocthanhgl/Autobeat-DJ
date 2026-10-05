@@ -993,9 +993,11 @@ class CrossfadeController(
     }
 
     private fun isSwapCut(): Boolean {
-        // DJ-only latch: stock upstream bails the arm on every seek-cut, so
-        // normal Automix must too (a quality-swap seek re-arms from the ticks).
-        if (!AppSettings.mixsetModeEnabled.value) return false
+        // Both modes honour the latch: a quality-swap cut keeps the media id
+        // (only the rendition changes), so exempting it can never swallow a
+        // genuine user seek or skip — those change the id. Stock used to bail
+        // the arm on every swap cut, which is exactly how an online track with
+        // quality upgrade on reached the mix window and never mixed.
         val id = swapCutMediaId ?: return false
         if (SystemClock.elapsedRealtime() - swapCutAtMs > 3000L) {
             swapCutMediaId = null
@@ -1004,6 +1006,23 @@ class CrossfadeController(
         // The swap keeps the media id; a user skip landing here changes it,
         // so a genuine bail can never be swallowed by a stale latch.
         return active().currentMediaItem?.mediaId == id
+    }
+
+    /**
+     * A quality-swap cut landed (same track, new rendition/bytes). The arm in
+     * flight — if any — was rendered against the old rendition's duration and
+     * anchors, so it is torn down and the IDLE tick re-plans from scratch
+     * against the new duration on the very next tick. The teardown is not a
+     * storm: [bail] skips the F4 backoff for it, so a lossy→lossless double
+     * lap re-arms immediately instead of sitting out a cooldown. A blend
+     * already past handoff is left alone — both decks hold their sources and
+     * mid-fade surgery would be worse than the drift.
+     */
+    private fun onSwapCut() {
+        TrackLog.d(TAG, "swap cut on ${active().currentMediaItem?.mediaId}: re-plan")
+        frozenAnchorPair = null
+        clearMarkerLatch()
+        if (phase == Phase.ARMING) bail(fromSwap = true)
     }
 
     private val listener = object : Player.Listener {
@@ -1015,9 +1034,11 @@ class CrossfadeController(
             // The listener moving the playhead is something no half-finished
             // crossfade should survive. Nothing this class does registers here
             // any more: the handoff is a role swap, not a seek. Quality-swap
-            // cuts land as SEEK on the same id ΓÇö exempt (F1), they are not
+            // cuts land as SEEK on the same id — re-plan (S1), they are not
             // the listener acting.
-            if (reason == Player.DISCONTINUITY_REASON_SEEK && !isSwapCut()) bail()
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                if (isSwapCut()) onSwapCut() else bail()
+            }
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -1034,10 +1055,12 @@ class CrossfadeController(
                 // does *not* fire when AutoPlay appends to the end, since the
                 // playing item doesn't change: extending the queue mid-fade is
                 // harmless and shouldn't cost the listener the blend. A
-                // quality-swap cut reports the same reason on the same id ΓÇö
-                // exempt (F1), same as the SEEK above.
-                Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> if (!isSwapCut()) bail()
-                Player.MEDIA_ITEM_TRANSITION_REASON_SEEK -> bail()
+                // quality-swap cut reports the same reason on the same id —
+                // re-plan (S1), same as the SEEK above.
+                Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED ->
+                    if (isSwapCut()) onSwapCut() else bail()
+                Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ->
+                    if (isSwapCut()) onSwapCut() else bail()
                 // Full-audit P3: a natural auto-advance reaching this listener
                 // means ExoPlayer moved the queue on by itself — our blend
                 // never fired (missed window, stuck ARMING across the
@@ -1578,10 +1601,15 @@ class CrossfadeController(
         // no region and no transition, looking identical to Automix but
         // never mixing.
         val realMix = planIsRealMix(plan)
+        // The outgoing side needs the full pass: a head-only result has no
+        // content end / mix-out anchors, so its window is an end-of-track
+        // fallback that jumps when the whole-track pass lands. The incoming
+        // side stays head-admissible (entry cues are what the head measures).
         val markable = !plan.blocked &&
             plan.markerVisible &&
             duration > 0L &&
             analysisState.current == TrackAnalysisState.ANALYSED &&
+            !currentAnalysis.provisionalHead &&
             analysisState.next in MEASURED_ENOUGH_TO_ENTER_ON
         val fingerprint = listOf(
             plan.transitionStart,
@@ -3150,13 +3178,14 @@ class CrossfadeController(
      * has been announced), so the only thing left is to take the outgoing track
      * away gracefully.
      */
-    private fun bail() {
+    private fun bail(fromSwap: Boolean = false) {
         if (phase == Phase.IDLE || phase == Phase.BAILING) return
         TrackLog.d(TAG, "bail from $phase")
         // Restore origin ee8a348 verbatim for stock Automix: bail cooldown
         // and half-time write are DJ-only (LEAK #11). Origin had no cooldown
-        // and no half-time.
-        val isDj = render.mixset
+        // and no half-time. A swap teardown is deliberate, not a storm, so it
+        // never counts toward the F4 backoff in either mode.
+        val isDj = render.mixset && !fromSwap
         if (isDj) {
             // Missed-window fix F4: count consecutive bails and hold the planner
             // back escalatingly. The cooldown is consumed in

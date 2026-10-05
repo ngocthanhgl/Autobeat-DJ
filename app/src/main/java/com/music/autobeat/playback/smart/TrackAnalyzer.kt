@@ -931,11 +931,10 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         // will not parse yet is not held against the rendition — more bytes may
         // well fix it — but a length that genuinely disagrees is.
         val expected = durationSeconds.takeIf { it.isFinite() && it > 0 }
-        // Set when the duration gate below gives up rejecting and lets the
-        // copy through marked: ORed into [TrackAnalysis.provisionalHead] at
-        // construction so the planner treats the result as suspect, never
+        // When the duration gate below gives up rejecting and lets the copy
+        // through, the result is still flagged: every head-only result now
+        // carries provisionalHead, so the planner treats it as suspect, never
         // as a confident full read.
-        var provisionalRendition = false
         if (expected != null && rendition.key != cache.cacheKeyOf(uri)) {
             val length = openSource()?.use(AudioDecoder::containerDurationSeconds)
             if (length == null || length <= 0) {
@@ -970,16 +969,15 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                     return null
                 }
                 // Same copy refused on every tick and nothing else to try: the
-                // skew is the container's, not a wrong cut. Let it through
-                // flagged — notably WITHOUT [badRenditions], which would hide
-                // it from every later tick and re-create the starvation.
+                // skew is the container's, not a wrong cut. Let it through —
+                // notably WITHOUT [badRenditions], which would hide it from
+                // every later tick and re-create the starvation.
                 TrackLog.d(
                     TAG,
                     "Head rendition ${rendition.key} for $trackId accepted provisionally " +
                         "after $rejects rejects " +
                         "(${"%.1f".format(Locale.ROOT, length)}s against ${"%.1f".format(Locale.ROOT, expected)}s expected)",
                 )
-                provisionalRendition = true
             } else {
                 renditionRejects.remove(rendition.key)
             }
@@ -1052,8 +1050,11 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             mixInCandidates = entry?.mixInCandidates.orEmpty(),
             energyCurve = if (shipHeadEvidence) headCurve else emptyList(),
             vocalActivityMask = if (shipHeadEvidence) headMask else emptyList(),
-            provisionalHead = AppSettings.mixsetModeEnabled.value &&
-                (shipHeadEvidence || provisionalRendition),
+            // Every head-only result is provisional in every mode: the pass
+            // never saw the tail, so content end / mix-out anchors are
+            // fallbacks, not measurements. (The shipped evidence above stays
+            // DJ-gated; only the flag is unconditional.)
+            provisionalHead = true,
         )
     }
 
