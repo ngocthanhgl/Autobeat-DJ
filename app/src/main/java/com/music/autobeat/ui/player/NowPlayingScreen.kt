@@ -8201,10 +8201,14 @@ private fun KeyBpmRow(
     }
 }
 
-/** One side of [KeyBpmRow]: colored Camelot code + white tempo, or dots. */
+/** One side of [KeyBpmRow]: colored Camelot code + white tempo, each with its own dots fallback. */
 private fun AnnotatedString.Builder.appendKeyBpmSide(bpm: Double, key: String, dotsAlpha: Float) {
     val label = camelotLabel(key)
-    if (bpm > 0 && label != null) {
+    if (label == null && bpm <= 0) {
+        withStyle(SpanStyle(color = Color.White.copy(alpha = dotsAlpha))) { append("...") }
+        return
+    }
+    if (label != null) {
         withStyle(
             SpanStyle(
                 color = CamelotColors.colorForKey(key) ?: Color.White.copy(alpha = 0.87f),
@@ -8213,8 +8217,15 @@ private fun AnnotatedString.Builder.appendKeyBpmSide(bpm: Double, key: String, d
         ) {
             append(label)
         }
+    } else {
+        withStyle(SpanStyle(color = Color.White.copy(alpha = dotsAlpha))) { append("...") }
+    }
+    withStyle(SpanStyle(color = Color.White.copy(alpha = 0.87f))) {
+        append(" · ")
+    }
+    if (bpm > 0) {
         withStyle(SpanStyle(color = Color.White.copy(alpha = 0.87f))) {
-            append(" · ${"%.0f".format(bpm)} BPM")
+            append("%.0f BPM".format(bpm))
         }
     } else {
         withStyle(SpanStyle(color = Color.White.copy(alpha = dotsAlpha))) { append("...") }

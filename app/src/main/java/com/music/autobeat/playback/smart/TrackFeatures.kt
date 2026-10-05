@@ -73,22 +73,32 @@ object TrackFeatures {
      * different estimator (Temperley profiles, Pearson correlation, versus
      * native Krumhansl dot-product).
      *
-     * Only contested labels are touched: a confident native read stands, and
-     * agreement keeps the label. Disagreement under the floor means neither
-     * estimator can be trusted, so the label is dropped and the policy reads
-     * the track as neutral instead of mixing in the wrong key. A missing
-     * chroma (cached analyses from before the bridge emitted it) keeps the
-     * native label untouched.
+     * An adjudicator, never an abstention: every analyzed track keeps a key
+     * label, because the display and the user always get a number. A
+     * confident native read stands, and agreement keeps the label. On
+     * disagreement the Temperley vote wins only with a clear margin
+     * ([KEY_OVERRULE_MARGIN]) — a coin-flip contest keeps the native read,
+     * which is usually right on triadic pop. A missing chroma (cached
+     * analyses from before the bridge emitted it) keeps the native label
+     * untouched. Mixing safety does not depend on this: the planner already
+     * neutralizes low-confidence keys at its scoring/shift floors, so a
+     * best-guess label here is informative without ever driving a mix it
+     * should not.
      */
     fun correctKey(features: Features): Features {
         val chroma = features.chroma
         if (chroma.size != 12 || chroma.sum() <= 0 || features.key.isBlank()) return features
         if (features.keyConfidence >= KEY_CONTESTED_CONFIDENCE) return features
         val native = parseKeyLabel(features.key) ?: return features
-        val mine = estimateKeyTemperley(chroma) ?: return features
-        if (mine == native) return features
-        TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) vs temperley $mine -> neutral")
-        return features.copy(key = "")
+        val (root, mode, margin) = estimateKeyTemperley(chroma) ?: return features
+        if (root == native.first && mode == native.second) return features
+        if (margin < KEY_OVERRULE_MARGIN) {
+            TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) vs temperley $root/$mode kept native (margin $margin)")
+            return features
+        }
+        val label = TEMPERLEY_ROOT_NAMES[root] + if (mode == 0) " major" else " minor"
+        TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) overruled by temperley $label (margin $margin)")
+        return features.copy(key = label)
     }
 
     /**
@@ -123,13 +133,17 @@ object TrackFeatures {
         return Pair((base + accidental + 12) % 12, mode)
     }
 
-    /** Pearson-correlation key estimate as (pitch class, mode); null when degenerate. */
-    private fun estimateKeyTemperley(chroma: List<Double>): Pair<Int, Int>? {
+    /**
+     * Pearson-correlation key estimate as (pitch class, mode, margin), where
+     * margin is the best score minus the runner-up. Null when degenerate.
+     */
+    private fun estimateKeyTemperley(chroma: List<Double>): Triple<Int, Int, Double>? {
         if (chroma.size != 12) return null
         val mean = chroma.sum() / 12
         var bestRoot = -1
         var bestMode = -1
         var bestScore = Double.NEGATIVE_INFINITY
+        var secondScore = Double.NEGATIVE_INFINITY
         for (root in 0..11) {
             for (mode in 0..1) {
                 val profile = if (mode == 0) TEMPERLEY_MAJOR else TEMPERLEY_MINOR
@@ -147,14 +161,17 @@ object TrackFeatures {
                 if (!(xx > 0) || !(yy > 0)) continue
                 val score = xy / sqrt(xx * yy)
                 if (score > bestScore) {
+                    secondScore = bestScore
                     bestScore = score
                     bestRoot = root
                     bestMode = mode
+                } else if (score > secondScore) {
+                    secondScore = score
                 }
             }
         }
         if (bestRoot < 0) return null
-        return Pair(bestRoot, bestMode)
+        return Triple(bestRoot, bestMode, bestScore - secondScore)
     }
 
     /**
@@ -394,6 +411,16 @@ object TrackFeatures {
         5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0,
     )
 
+    /**
+     * Sharp-spelled ASCII root names, parallel to the profiles above. Same
+     * spelling family the native detector emits ("C# minor", "Bb major"),
+     * and both [parseKeyLabel] here and [camelotOf] downstream accept '#'
+     * and 'b', so an overrule label parses everywhere a native one does.
+     */
+    private val TEMPERLEY_ROOT_NAMES = arrayOf(
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    )
+
     private const val TAG = "AutobeatTrackFeatures"
 
     /**
@@ -424,6 +451,16 @@ object TrackFeatures {
      * nothing acts on a key under it anyway.
      */
     const val KEY_CONTESTED_CONFIDENCE = 0.5
+
+    /**
+     * Minimum Temperley margin (best Pearson minus runner-up) to overrule a
+     * contested native label. Below it the contest is a coin flip and the
+     * native read stands — triadic pop at 0.4 native confidence is usually
+     * right, and a wrong overrule is worse than a weak keep because the
+     * planner's floors already neutralize weak keys. Every contest logs its
+     * margin, so this tunes from real logs, not theory.
+     */
+    const val KEY_OVERRULE_MARGIN = 0.05
 
     @JvmStatic private external fun nativeAnalyze(
         samples: FloatArray,

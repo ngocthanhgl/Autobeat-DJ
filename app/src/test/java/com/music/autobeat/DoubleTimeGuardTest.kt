@@ -150,6 +150,39 @@ class DoubleTimeGuardTest {
         return major.map { it / sum }
     }
 
+    /**
+     * Squared Temperley D-major template: the Pearson match at (D, major) is
+     * ~1.0 while every other root/mode sits far below, so the margin clears
+     * the overrule floor and a contested native C major loses the label.
+     */
+    private fun dMajorDecisiveChroma(): List<Double> {
+        val template = listOf(5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0)
+        val rotated = List(12) { p -> template[(p + 12 - 2) % 12] }
+        val squared = rotated.map { it * it }
+        val sum = squared.sum()
+        return squared.map { it / sum }
+    }
+
+    @Test
+    fun `decisive temperley disagreement overrules a contested label`() {
+        val fixed = TrackFeatures.correctKey(
+            features(100.0, 0.6, 0.0, 200.0, emptyList(), key = "C major", keyConfidence = 0.2, chroma = dMajorDecisiveChroma()),
+        )
+        assertEquals("D major", fixed.key)
+    }
+
+    @Test
+    fun `coin-flip contest keeps the native read`() {
+        // Near-flat ramp: every template correlates weakly and the top two
+        // sit within a hair of each other, so whatever wins, the margin veto
+        // keeps the contested native label instead of flipping a coin.
+        val ramp = List(12) { p -> (1.0 + 0.001 * p) / (12.0 + 0.001 * 66.0) }
+        val fixed = TrackFeatures.correctKey(
+            features(100.0, 0.6, 0.0, 200.0, emptyList(), key = "C major", keyConfidence = 0.2, chroma = ramp),
+        )
+        assertEquals("C major", fixed.key)
+    }
+
     @Test
     fun `agreeing estimators keep a contested label`() {
         val fixed = TrackFeatures.correctKey(
