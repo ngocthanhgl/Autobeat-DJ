@@ -1,6 +1,7 @@
 package com.music.autobeat
 
 import com.music.autobeat.playback.smart.TrackFeatures
+import com.music.autobeat.playback.smart.camelotLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -253,5 +254,51 @@ class DoubleTimeGuardTest {
             features(100.0, 0.6, 0.0, 200.0, emptyList(), key = "G major", keyConfidence = 0.7, chroma = flat),
         )
         assertEquals("G major", fixed.key)
+    }
+
+    @Test
+    fun `all twelve ascii native names parse - a silent parse failure keeps the label`() {
+        // The JNI bridge keeps bytes 32-126 only, so the native table spells
+        // black keys ASCII ("C#", "Bb"). adjudicateKey returns the label
+        // unchanged when parsing fails — indistinguishable from a keep — so
+        // the assertion demands the overrule: adversarial decisive-D-major
+        // chroma must flip every label to "D major". Any name that does not
+        // parse comes back native and fails here instead of mislabeling a
+        // semitone off in production.
+        val names = listOf(
+            "C", "C#", "D", "Eb", "E", "F",
+            "F#", "G", "Ab", "A", "Bb", "B",
+        )
+        for (name in names) {
+            for (mode in listOf("major", "minor")) {
+                val fixed = TrackFeatures.correctKey(
+                    features(
+                        100.0, 0.6, 0.0, 200.0, emptyList(),
+                        key = "$name $mode", keyConfidence = 0.2, chroma = dMajorDecisiveChroma(),
+                    ),
+                )
+                assertEquals("$name $mode should parse and lose to decisive D major", "D major", fixed.key)
+            }
+        }
+    }
+
+    @Test
+    fun `camelot labels stay inside the wheel alphabet`() {
+        // The pill's trailing A/B is the ring (A minor-side, B major-side),
+        // never the pitch — pin the alphabet so a future edit cannot smuggle
+        // a root letter into the code slot and re-create the "only A and B"
+        // misread.
+        val alphabet = Regex("^(1[0-2]|[1-9])[AB]$")
+        val roots = listOf(
+            "C", "C#", "D", "Eb", "E", "F",
+            "F#", "G", "Ab", "A", "Bb", "B",
+            "C♯", "E♭", "F♯", "A♭", "B♭",
+        )
+        for (root in roots) {
+            for (mode in listOf("major", "minor")) {
+                val label = camelotLabel("$root $mode")
+                assertTrue("$root $mode -> $label", label != null && alphabet.matches(label))
+            }
+        }
     }
 }

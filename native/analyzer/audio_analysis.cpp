@@ -414,9 +414,13 @@ void AnalyzeKeyAndTimbre(
 
   constexpr std::array<double, 12> major = {6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88};
   constexpr std::array<double, 12> minor = {6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17};
+  // ASCII spellings only: the JNI string bridge keeps bytes 32-126, so a
+  // UTF-8 accidental would arrive with its bytes stripped and parse as the
+  // wrong natural (C-sharp read as C, E-flat read as E). The Kotlin side
+  // accepts '#'/'b' and canonicalizes to Unicode for its tables.
   constexpr std::array<const char*, 12> names = {
-    "C", "C\xE2\x99\xAF", "D", "E\xE2\x99\xAD", "E", "F",
-    "F\xE2\x99\xAF", "G", "A\xE2\x99\xAD", "A", "B\xE2\x99\xAD", "B"
+    "C", "C#", "D", "Eb", "E", "F",
+    "F#", "G", "Ab", "A", "Bb", "B"
   };
   std::vector<std::pair<double, std::string>> candidates;
   for (size_t root = 0; root < 12; ++root) {

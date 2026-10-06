@@ -1576,9 +1576,11 @@ private fun normalizedTempoRatio(currentBpm: Double, nextBpm: Double): Double {
 
 private fun splitKey(key: String, mixset: Boolean = false): Pair<Int?, String?> {
     val parts = key.trim().split(' ')
-    // Stock upstream on normal Automix: raw lookup — ASCII accidentals parse
-    // to null. Canonicalization is DJ-only.
-    val root = if (mixset) canonicalKeyRoot(parts.firstOrNull()) else parts.firstOrNull()
+    // Canonicalized on every path, not just DJ: Temperley overrules spell
+    // black keys ASCII ("A#"), and the index below is Unicode-only, so a
+    // raw lookup reads every sharp/flat as null and silently disables key
+    // scoring, shifting and the pitch veto on stock Automix too.
+    val root = canonicalKeyRoot(parts.firstOrNull())
     return KEY_INDEX[root] to parts.getOrNull(1)
 }
 

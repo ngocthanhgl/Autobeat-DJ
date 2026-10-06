@@ -1127,12 +1127,12 @@ private val PITCH_CLASS_INDEX = mapOf(
 )
 
 /**
- * The native detector emits ASCII accidentals ("C# minor", "Bb major") while
- * every Kotlin table reads Unicode ("C♯", "B♭") — and JNI documents its
- * strings as ASCII-only literals, so Unicode can never arrive. Canonicalize
- * at the single lookup point all tables share: without it every sharp/flat
- * key in production parses to null and silently disables key scoring,
- * shifting and the pitch veto.
+ * The native detector emits ASCII accidentals ("C# minor", "Bb major") by
+ * contract — the JNI string bridge keeps bytes 32-126 only, so UTF-8
+ * sharps/flats could never survive the crossing — while every Kotlin table
+ * reads Unicode ("C♯", "B♭"). Canonicalize at the single lookup point all
+ * tables share: without it every sharp/flat key in production parses to
+ * null and silently disables key scoring, shifting and the pitch veto.
  */
 fun canonicalKeyRoot(raw: String?): String? {
     if (raw.isNullOrEmpty()) return null

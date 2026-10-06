@@ -1029,6 +1029,16 @@ class CrossfadeController(
     private var lastPlanVerdict = ""
 
     /**
+     * "title [id]" for the plan/transition log lines when the item carries a
+     * title, else the bare id — ids alone cannot be Googled for ground truth.
+     */
+    private fun titleOf(item: MediaItem): String {
+        val title = item.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() }
+            ?: return item.mediaId
+        return "$title [${item.mediaId}]"
+    }
+
+    /**
      * The last published marker and the pair it was planned for. A tick whose
      * plan dips transiently unmarkable (outgoing back to REFINING while its
      * whole-track pass re-runs, one blocked flicker) must not blank a window
@@ -1704,7 +1714,7 @@ class CrossfadeController(
             lastPlanVerdict = verdict
             TrackLog.d(
                 TAG,
-                "plan ${currentItem.mediaId}->${nextItem.mediaId}: $verdict " +
+                "plan ${titleOf(currentItem)}->${titleOf(nextItem)}: $verdict " +
                     "bpm=${currentAnalysis.bpm}/${nextAnalysis.bpm} " +
                     "conf=${currentAnalysis.beatConfidence}/${nextAnalysis.beatConfidence}",
             )
@@ -2103,7 +2113,7 @@ class CrossfadeController(
         }
         TrackLog.d(
             TAG,
-            "transition ${currentItem.mediaId}->${nextItem.mediaId} type=${plan.type} " +
+            "transition ${titleOf(currentItem)}->${titleOf(nextItem)} type=${plan.type} " +
                 "phrase=[${"%.2f".format(plan.transitionStart)}→" +
                 "${"%.2f".format(plan.transitionStart + plan.fadeSeconds)}] " +
                 "swap@${if (swapAtSec.isFinite()) "%.2f".format(swapAtSec) else "-"} " +

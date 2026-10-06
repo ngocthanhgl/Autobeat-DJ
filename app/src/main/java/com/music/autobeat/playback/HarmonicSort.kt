@@ -418,7 +418,8 @@ object HarmonicSort {
         if (deps.analyzer.analysisFor(id).isUsable) return
         val host = player ?: return
         val liveIndex = host.indexOfId(id) ?: return
-        val uri = host.getMediaItemAt(liveIndex).localConfiguration?.uri ?: return
+        val liveItem = host.getMediaItemAt(liveIndex)
+        val uri = liveItem.localConfiguration?.uri ?: return
         // Warm the two behind it too: the worker measures sequentially, so
         // by the time it reaches them their bytes are already on disk
         // instead of each starting its resolve cold inside its own 90 s.
@@ -435,7 +436,12 @@ object HarmonicSort {
         val priority = deps.analyzer.priorityIds
         val wanted = (listOf(id) + follow).filter { it in priority }
         deps.cache.forceFullPull(if (wanted.isNotEmpty()) wanted else listOf(id))
-        deps.analyzer.request(id, uri, durationSeconds(host, liveIndex))
+        deps.analyzer.request(
+            id,
+            uri,
+            durationSeconds(host, liveIndex),
+            liveItem.mediaMetadata.title?.toString(),
+        )
         try {
             withTimeout(TRACK_TIMEOUT_MS) {
                 while (true) {

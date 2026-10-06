@@ -8120,8 +8120,12 @@ private object CamelotColors {
 }
 
 /**
- * Key + tempo of the playing pair, for DJs and the curious: "3A · 130 BPM
- * → 4A · 124 BPM". Sits below the quality badge (see the call site under
+ * Key + tempo of the playing pair, for DJs and the curious: "8A · A min · 130 BPM
+ * → 4A · F min · 124 BPM". The leading code is the Camelot wheel position (its
+ * trailing A/B is the ring — A minor-side, B major-side — not the pitch), and
+ * the spelled root next to it is the measured key itself, so a collapsed or
+ * mislabeled detector reads as wrong notes here instead of hiding inside a
+ * code. Sits below the quality badge (see the call site under
  * the timestamps), centered like both.
  *
  * A side with nothing usable on record shows breathing dots, not a blank:
@@ -8201,7 +8205,7 @@ private fun KeyBpmRow(
     }
 }
 
-/** One side of [KeyBpmRow]: colored Camelot code + white tempo, each with its own dots fallback. */
+/** One side of [KeyBpmRow]: colored Camelot code + spelled key root + white tempo, each with its own dots fallback. */
 private fun AnnotatedString.Builder.appendKeyBpmSide(bpm: Double, key: String, dotsAlpha: Float) {
     val label = camelotLabel(key)
     if (label == null && bpm <= 0) {
@@ -8216,6 +8220,20 @@ private fun AnnotatedString.Builder.appendKeyBpmSide(bpm: Double, key: String, d
             ),
         ) {
             append(label)
+        }
+        // The Camelot trailing A/B is the ring, not the pitch — spell the
+        // measured root beside it ("8A · A min") so the detector's answer is
+        // visible instead of only its wheel position.
+        val parts = key.trim().split(' ')
+        if (parts.size == 2 && parts[0].isNotEmpty()) {
+            val modeShort = when (parts[1].lowercase()) {
+                "major" -> "maj"
+                "minor" -> "min"
+                else -> parts[1].take(3)
+            }
+            withStyle(SpanStyle(color = Color.White.copy(alpha = 0.87f))) {
+                append(" · ${parts[0]} $modeShort")
+            }
         }
     } else {
         withStyle(SpanStyle(color = Color.White.copy(alpha = dotsAlpha))) { append("...") }

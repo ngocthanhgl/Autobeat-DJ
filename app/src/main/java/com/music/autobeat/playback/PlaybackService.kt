@@ -1576,7 +1576,12 @@ class PlaybackService : MediaLibraryService() {
             analysisFor = { item -> trackAnalyzer.analysisFor(item.mediaId) },
             requestAnalysis = { item, durationMs ->
                 item.localConfiguration?.uri?.let { uri ->
-                    trackAnalyzer.request(item.mediaId, uri, durationMs / 1000.0)
+                    trackAnalyzer.request(
+                        item.mediaId,
+                        uri,
+                        durationMs / 1000.0,
+                        item.mediaMetadata.title?.toString(),
+                    )
                 }
             },
             // "Incoming" and "outgoing" are roles, not players. The controller

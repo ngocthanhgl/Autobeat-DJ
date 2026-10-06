@@ -47,7 +47,9 @@ namespace {
 // The analyzer's strings are its own literals -- key names like "C# minor"
 // and candidate types like "main_drop" -- so they are known ASCII with
 // nothing to escape. Anything unexpected is dropped rather than emitted
-// unescaped.
+// unescaped. Contract, enforced at the source: the native key table must
+// stay ASCII ("C#", "Bb", never UTF-8 sharps/flats), because a multibyte
+// accidental would lose its high bytes here and parse as the wrong natural.
 void AppendString(std::string& out, const std::string& value) {
   out += '"';
   for (const char character : value) {
