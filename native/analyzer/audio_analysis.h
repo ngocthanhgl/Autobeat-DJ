@@ -95,6 +95,10 @@ struct AnalysisResult {
   double key_confidence = 0;
   // Sum-normalized C through B pitch-class energy in chromatic order.
   std::vector<double> chroma;
+  // Mean spectral flatness over the frames the chroma accumulated (1 = white
+  // noise, 0 = pure tone). Diagnostic: a high value with a collapsed key
+  // confidence means drum-break/hiss frames owned the chroma vector.
+  double key_flatness = 0;
   double audible_start_time = 0;
   double pickup_time = 0;
   double pickup_confidence = 0;

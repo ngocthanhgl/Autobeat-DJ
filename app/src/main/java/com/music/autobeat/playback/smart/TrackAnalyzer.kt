@@ -1028,6 +1028,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         TrackLog.d(
             TAG,
             "Analysed head of ${displayName(trackId)}: bpm=${grid?.bpm ?: entry?.bpm} " +
+                "(src=${if (grid != null) "model" else "dsp"}, dsp ${entry?.bpm}) " +
                 "conf=${grid?.beatConfidence ?: entry?.beatConfidence} " +
                 "audibleStart=${entry?.audibleStartTime} pickup=${entry?.pickupTime} " +
                 "introEnd=${entry?.introEndTime} mixInCandidates=${entry?.mixInCandidates?.size ?: 0} " +
@@ -1371,7 +1372,7 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             pcm.samples
         }
 
-        return Structural(TrackFeatures.analyze(samples, effectiveDuration))
+        return Structural(TrackFeatures.analyze(samples, effectiveDuration, trackId))
     }
 
     /**
@@ -1511,12 +1512,24 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         val headGrid = head?.grid?.let { guardModelGrid(it, features, trackId, 0.0, windowEnd) }
         val tailGrid = tail?.grid?.let { guardModelGrid(it, features, trackId, tailStart, effectiveDuration) }
         val leading = tailGrid ?: headGrid
+        // Post-vote provenance (session-9 Axel F gap): the DSP vote trail
+        // above says one tempo, this line says which grid actually won and by
+        // how much — a silent model-vs-DSP switch is now a visible one.
+        if (leading != null && abs(leading.bpm - features.bpm) > 0.5) {
+            TrackLog.d(
+                TAG,
+                "grid leads $trackId: dsp ${features.bpm} -> model ${leading.bpm} " +
+                    "(${if (tailGrid != null) "tail" else "head"})",
+            )
+        }
 
         TrackLog.d(
             TAG,
             "Analysed ${displayName(trackId)}: bpm=${leading?.bpm ?: features.bpm} " +
+                "(dsp ${features.bpm}) " +
                 "conf=${leading?.beatConfidence ?: features.beatConfidence} " +
-                "key=${features.key} contentEnd=${features.contentEndTime} " +
+                "(dspConf ${features.beatConfidence}) " +
+                "key=${features.key} flat=${features.keyFlatness} contentEnd=${features.contentEndTime} " +
                 "mixOutCandidates=${features.mixOutCandidates.size} " +
                 "vocalMask=${if (head?.vocalMask != null || tail?.vocalMask != null) "model" else "dsp"}",
         )

@@ -178,6 +178,8 @@ Java_com_music_autobeat_playback_smart_TrackFeatures_nativeAnalyze(
   // Sum-normalized C..B chroma for the Kotlin second-opinion key vote.
   json += ",\"chroma\":";
   AppendDoubles(json, result.chroma);
+  // Mean key-frame flatness: contamination witness for collapsed key reads.
+  AppendField(json, "keyFlatness", result.key_flatness);
   json += ",\"spectralCentroidCurve\":";
   AppendEnergyCurve(json, result.spectral_centroid_frames);
   json += ",\"energyCurveFine\":";

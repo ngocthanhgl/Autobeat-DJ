@@ -55,8 +55,12 @@ object TrackFeatures {
      * Returns null when the native library is missing or the analyzer
      * declined the input. Callers treat that as "no evidence", which the
      * policy already degrades on.
+     *
+     * [trackId] is log provenance only: the vote/contest lines below would
+     * otherwise interleave across concurrent analyses with no way to tell
+     * which track a density triple belongs to (session-9 Axel F gap).
      */
-    fun analyze(samples: FloatArray, durationSeconds: Double): Features? {
+    fun analyze(samples: FloatArray, durationSeconds: Double, trackId: String = ""): Features? {
         if (!available || samples.isEmpty()) return null
         val json = runCatching { nativeAnalyze(samples, sampleRate, durationSeconds) }
             .onFailure { TrackLog.w(TAG, "Native analysis failed", it) }
@@ -64,9 +68,12 @@ object TrackFeatures {
         return runCatching { parse(JSONObject(json)) }
             .onFailure { TrackLog.w(TAG, "Could not parse analysis output", it) }
             .getOrNull()
-            ?.let { correctDoubleTime(it) }
-            ?.let { correctKey(it) }
+            ?.let { correctDoubleTime(it, trackId) }
+            ?.let { correctKey(it, trackId) }
     }
+
+    /** Log tag suffix: " [id]" when the caller passed provenance, else "". */
+    private fun tag(trackId: String) = if (trackId.isBlank()) "" else " [$trackId]"
 
     /**
      * Second opinion on the native key, from the same chroma through a
@@ -84,11 +91,20 @@ object TrackFeatures {
      * neutralizes low-confidence keys at its scoring/shift floors, so a
      * best-guess label here is informative without ever driving a mix it
      * should not.
+     *
+     * Ground-truth anchors (verified 2026-10-06, session-9 follow-up):
+     * Robert Miles "Children" is F minor, Harold Faltermeyer "Axel F" is
+     * Db major (3B) — both at the catalog tempo (137 / 117), which exonerates
+     * the tempo estimator and convicts this contest: both read A minor here
+     * before the fix round. The scorer audit found the native Krumhansl
+     * dot-product uncentered (minor wins by construction on flat chroma);
+     * the real fix (centered scorer, per-octave normalization, tonal gate)
+     * tunes against these two anchors, not theory.
      */
-    fun correctKey(features: Features): Features {
-        val label = adjudicateKey(features.chroma, features.key, features.keyConfidence)
+    fun correctKey(features: Features, trackId: String = ""): Features {
+        val label = adjudicateKey(features.chroma, features.key, features.keyConfidence, trackId)
         if (label == features.key) return features
-        TrackLog.d(TAG, "key contest: native ${features.key} (${features.keyConfidence}) overruled by temperley $label")
+        TrackLog.d(TAG, "key contest${tag(trackId)}: native ${features.key} (${features.keyConfidence}) overruled by temperley $label")
         return features.copy(key = label)
     }
 
@@ -99,20 +115,20 @@ object TrackFeatures {
      * never blank — a missing chroma, an unparseable label, or a coin-flip
      * margin keeps the native read, matching [correctKey] exactly.
      */
-    internal fun adjudicateKey(chroma: List<Double>, key: String, keyConfidence: Double): String {
+    internal fun adjudicateKey(chroma: List<Double>, key: String, keyConfidence: Double, trackId: String = ""): String {
         if (chroma.size != 12 || chroma.sum() <= 0 || key.isBlank()) return key
         if (keyConfidence >= KEY_CONTESTED_CONFIDENCE) return key
         val native = parseKeyLabel(key) ?: return key
         val (root, mode, margin) = estimateKeyTemperley(chroma) ?: return key
         if (root == native.first && mode == native.second) return key
         if (margin < KEY_OVERRULE_MARGIN) {
-            TrackLog.d(TAG, "key contest: native $key ($keyConfidence) vs temperley $root/$mode kept native (margin $margin)")
+            TrackLog.d(TAG, "key contest${tag(trackId)}: native $key ($keyConfidence) vs temperley $root/$mode kept native (margin $margin)")
             return key
         }
         // Retune feed: the overrule margin is the number the next round sets
         // KEY_OVERRULE_MARGIN from — a log of keeps alone cannot show where
         // the decisive contests actually land.
-        TrackLog.d(TAG, "key contest: native $key ($keyConfidence) overruled by temperley $root/$mode (margin $margin)")
+        TrackLog.d(TAG, "key contest${tag(trackId)}: native $key ($keyConfidence) overruled by temperley $root/$mode (margin $margin)")
         return TEMPERLEY_ROOT_NAMES[root] + if (mode == 0) " major" else " minor"
     }
 
@@ -212,7 +228,7 @@ object TrackFeatures {
      * true fast material stays busy at its own rate, so the pair separates
      * them without any amplitude information.
      */
-    fun correctDoubleTime(features: Features): Features {
+    fun correctDoubleTime(features: Features, trackId: String = ""): Features {
         val bpm = features.bpm
         val interval = features.beatInterval.takeIf { it > 0 }
             ?: if (bpm > 0) 60.0 / bpm else 0.0
@@ -220,7 +236,7 @@ object TrackFeatures {
         val onsets = features.onsetTimes.filter { it.isFinite() }.sorted()
         val duration = features.duration
         if (onsets.isEmpty() || !(duration > interval)) {
-            TrackLog.d(TAG, "double-time guard: $bpm kept (no onset data to vote on)")
+            TrackLog.d(TAG, "double-time guard${tag(trackId)}: $bpm kept (no onset data to vote on)")
             return features
         }
         // Halve arm (unchanged): a winner above the floor can only be the
@@ -235,10 +251,10 @@ object TrackFeatures {
                 val halvedInterval = interval * 2
                 val downbeats = rebuildDownbeats(features.firstBeat, halvedInterval, duration, onsets)
                     .ifEmpty { features.downbeats }
-                TrackLog.d(TAG, "double-time guard: $bpm -> $halved (onsets $perClaimed/beat, $perHalved/half-beat)")
+                TrackLog.d(TAG, "double-time guard${tag(trackId)}: $bpm -> $halved (onsets $perClaimed/beat, $perHalved/half-beat)")
                 return features.copy(bpm = halved, beatInterval = halvedInterval, downbeats = downbeats)
             }
-            TrackLog.d(TAG, "double-time guard: $bpm kept (onsets $perClaimed/beat, $perHalved/half-beat)")
+            TrackLog.d(TAG, "double-time guard${tag(trackId)}: $bpm kept (onsets $perClaimed/beat, $perHalved/half-beat)")
             return features
         }
         // Double arm (P0 tempo honesty): the mirror hole — a winner below
@@ -256,20 +272,25 @@ object TrackFeatures {
                 val doubledInterval = interval / 2
                 val downbeats = rebuildDownbeats(features.firstBeat, doubledInterval, duration, onsets)
                     .ifEmpty { features.downbeats }
-                TrackLog.d(TAG, "half-time guard: $bpm -> $doubled (onsets $perClaimed/beat, $perDoubled/double-beat)")
+                TrackLog.d(TAG, "half-time guard${tag(trackId)}: $bpm -> $doubled (onsets $perClaimed/beat, $perDoubled/double-beat)")
                 return features.copy(bpm = doubled, beatInterval = doubledInterval, downbeats = downbeats)
             }
-            TrackLog.d(TAG, "half-time guard: $bpm kept (onsets $perClaimed/beat, $perDoubled/double-beat)")
+            TrackLog.d(TAG, "half-time guard${tag(trackId)}: $bpm kept (onsets $perClaimed/beat, $perDoubled/double-beat)")
             return features
         }
         // Mid band (100-165): neither arm votes here, so a wrong winner sails
         // through unexamined (Brother Louie '98 read 118.28 against a true
         // 109). Log the densities anyway — the next session log shows whether
-        // the miss was sparse, dense, or off-grid instead of silent.
+        // the miss was sparse, dense, or off-grid instead of silent. The arms
+        // below are evaluated log-only: a "would fire" here is a mid-band
+        // octave suspect the bpm gates blinded, and the next round decides
+        // whether the gates move. No action is taken on any band.
         val perClaimed = onsetsPerBeat(onsets, duration, interval)
         val perHalved = onsetsPerBeat(onsets, duration, interval * 2)
         val perDoubled = onsetsPerBeat(onsets, duration, interval / 2)
-        TrackLog.d(TAG, "tempo vote: $bpm kept mid-band (onsets $perClaimed/beat, $perHalved/half-beat, $perDoubled/double-beat)")
+        val wouldHalve = perClaimed < DOUBLE_SPARSE_PER_BEAT && perHalved > DOUBLE_BUSY_PER_HALF_BEAT
+        val wouldDouble = perClaimed >= HALF_BUSY_PER_BEAT && perDoubled >= HALF_GROOVE_PER_DOUBLE_BEAT
+        TrackLog.d(TAG, "tempo vote${tag(trackId)}: $bpm kept mid-band (onsets $perClaimed/beat, $perHalved/half-beat, $perDoubled/double-beat, wouldHalve=$wouldHalve, wouldDouble=$wouldDouble)")
         return features
     }
 
@@ -375,6 +396,10 @@ object TrackFeatures {
         val spectralCentroidCurve: List<EnergySample> = emptyList(),
         val energyCurveFine: List<EnergySample> = emptyList(),
         val chroma: List<Double> = emptyList(),
+        // Mean spectral flatness over the native key frames (1 = noise,
+        // 0 = tone). Transient diagnostic, never stored — a collapsed key
+        // with high flatness means broadband frames owned the chroma.
+        val keyFlatness: Double = Double.NaN,
     )
 
     fun parse(root: JSONObject): Features = Features(
@@ -410,6 +435,7 @@ object TrackFeatures {
         // from before the bridge emitted it, which disables the second
         // opinion below instead of guessing.
         chroma = root.doubles("chroma"),
+        keyFlatness = root.optDouble("keyFlatness", Double.NaN).takeIf { it.isFinite() } ?: Double.NaN,
     )
 
     private fun JSONObject.doubles(name: String): List<Double> {
@@ -460,13 +486,15 @@ object TrackFeatures {
     )
 
     /**
-     * Sharp-spelled ASCII root names, parallel to the profiles above. Same
-     * spelling family the native detector emits ("C# minor", "Bb major"),
-     * and both [parseKeyLabel] here and [camelotOf] downstream accept '#'
-     * and 'b', so an overrule label parses everywhere a native one does.
+     * Flat-spelled ASCII root names, parallel to the profiles above — the
+     * same spelling family the native detector emits ("C# minor",
+     * "Bb major"), so an overrule label is byte-identical in kind to a
+     * native one everywhere it parses ([parseKeyLabel], [camelotOf]
+     * downstream). Sharps here previously drifted ("D#", "G#", "A#") against
+     * the native flats on the same pitch classes.
      */
     private val TEMPERLEY_ROOT_NAMES = arrayOf(
-        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
     )
 
     private const val TAG = "AutobeatTrackFeatures"

@@ -455,12 +455,15 @@ void AnalyzeKeyAndTimbre(
 
   // The track-wide summary keeps its existing meaning -- the same logistic over
   // whole-track band totals -- so callers that only want "is this a vocal
-  // track" are unaffected by the per-frame curve.
+  // track" are unaffected by the per-frame curve. The mean flatness rides
+  // along as a diagnostic (see AnalysisResult.key_flatness).
+  result.key_flatness =
+      flatness_total / static_cast<double>(std::max<size_t>(1, accepted_frames));
   result.vocal_probability = VocalProbabilityFrom(
     low_energy,
     vocal_energy,
     high_energy,
-    flatness_total / std::max<size_t>(1, accepted_frames)
+    result.key_flatness
   );
 }
 
