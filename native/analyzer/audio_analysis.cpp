@@ -334,6 +334,11 @@ void AnalyzeKeyAndTimbre(
   // energy (hats, harmonics, formants) bury the bass that names the key.
   // Weighting each bin by the inverse of its semitone's bin count gives
   // every semitone one equal vote per octave; low octaves keep ~1.
+  // The vote itself must stay LINEAR power per semitone: dividing a
+  // log-compressed sum by the bin count yields the mean of logs (log of
+  // the geometric mean), which lets high-octave broadband paint a flat
+  // pedestal over all 12 classes. The single log1p compression happens
+  // once per class after the frame loop (see below).
   const double bin_hz = sample_rate / static_cast<double>(frame_size);
   // 2^(1/24) - 2^(-1/24): fractional semitone width at any frequency.
   constexpr double kSemitoneFraction = 0.0578;
@@ -388,9 +393,15 @@ void AnalyzeKeyAndTimbre(
       const int midi = static_cast<int>(std::round(69.0 + 12.0 * std::log2(frequency / 440.0)));
       const int pitch_class = (midi % 12 + 12) % 12;
       const double weight = std::log1p(power);
-      const double bins_per_semitone =
-          (frequency * kSemitoneFraction) / bin_hz;
-      chroma[pitch_class] += weight * rms / std::max(1.0, bins_per_semitone);
+      // Bins under 80 Hz stay out of the chroma (band-energy stats above are
+      // unaffected): kick fundamentals live at 50-60 Hz in every genre and
+      // pile onto A1 (55 Hz -> bin 9), biasing all key reads toward A.
+      // Bass roots keep voting through their harmonics at/above 80 Hz.
+      if (frequency >= 80.0) {
+        const double bins_per_semitone =
+            (frequency * kSemitoneFraction) / bin_hz;
+        chroma[pitch_class] += power * rms / std::max(1.0, bins_per_semitone);
+      }
       frame_chroma += weight;
     }
     const double frame_flatness = flatness_bins && arithmetic_sum > 0
@@ -418,6 +429,10 @@ void AnalyzeKeyAndTimbre(
     ++accepted_frames;
   }
 
+  // One log compression per pitch class AFTER accumulation: relief between
+  // tonal peaks and the broadband floor survives into the normalized chroma
+  // below, instead of being averaged away frame by frame.
+  for (double& value : chroma) value = std::log1p(value);
   result.chroma.assign(chroma.begin(), chroma.end());
   const double chroma_sum = std::accumulate(result.chroma.begin(), result.chroma.end(), 0.0);
   if (chroma_sum > 0) for (double& value : result.chroma) value /= chroma_sum;
@@ -433,18 +448,43 @@ void AnalyzeKeyAndTimbre(
     "F#", "G", "Ab", "A", "Bb", "B"
   };
   std::vector<std::pair<double, std::string>> candidates;
+  // Pearson (centered) correlation, not a raw dot-product: the templates
+  // carry different total weight (major 41.79 vs minor 44.51), so an
+  // uncentered score lets minor win by construction on flat chroma, and
+  // the exact ties then fall through to sort order (A minor, every time).
+  // Centering removes both failure modes. Rotation preserves each
+  // template's variance, so the denominators are root-independent.
+  double chroma_mean = 0.0;
+  for (double value : result.chroma) chroma_mean += value;
+  chroma_mean /= 12.0;
+  double var_chroma = 0.0;
+  for (double value : result.chroma) var_chroma += (value - chroma_mean) * (value - chroma_mean);
+  double major_mean = 0.0, minor_mean = 0.0;
+  for (int i = 0; i < 12; ++i) { major_mean += major[i]; minor_mean += minor[i]; }
+  major_mean /= 12.0; minor_mean /= 12.0;
+  double var_major = 0.0, var_minor = 0.0;
+  for (int i = 0; i < 12; ++i) {
+    var_major += (major[i] - major_mean) * (major[i] - major_mean);
+    var_minor += (minor[i] - minor_mean) * (minor[i] - minor_mean);
+  }
+  const double denom_major = std::sqrt(std::max(1e-12, var_chroma * var_major));
+  const double denom_minor = std::sqrt(std::max(1e-12, var_chroma * var_minor));
+  // Degenerate input (bit-identical flat chroma: no tonal evidence at all)
+  // emits no label instead of a deterministic lie; downstream treats blank
+  // as neutral and the second opinion decides.
+  const bool has_evidence = var_chroma >= 1e-6;
   for (size_t root = 0; root < 12; ++root) {
-    double major_score = 0;
-    double minor_score = 0;
+    double cov_major = 0.0, cov_minor = 0.0;
     for (size_t pitch = 0; pitch < 12; ++pitch) {
-      major_score += result.chroma[pitch] * major[(pitch + 12 - root) % 12];
-      minor_score += result.chroma[pitch] * minor[(pitch + 12 - root) % 12];
+      const double centered = result.chroma[pitch] - chroma_mean;
+      cov_major += centered * (major[(pitch + 12 - root) % 12] - major_mean);
+      cov_minor += centered * (minor[(pitch + 12 - root) % 12] - minor_mean);
     }
-    candidates.emplace_back(major_score, std::string(names[root]) + " major");
-    candidates.emplace_back(minor_score, std::string(names[root]) + " minor");
+    candidates.emplace_back(has_evidence ? cov_major / denom_major : 0.0, std::string(names[root]) + " major");
+    candidates.emplace_back(has_evidence ? cov_minor / denom_minor : 0.0, std::string(names[root]) + " minor");
   }
   std::sort(candidates.begin(), candidates.end(), std::greater<>());
-  if (chroma_weight > 0 && !candidates.empty()) {
+  if (chroma_weight > 0 && !candidates.empty() && has_evidence) {
     result.key = candidates[0].second;
     result.key_confidence = Clamp(
       (candidates[0].first - candidates[1].first) / std::max(0.01, candidates[0].first) * 4.0,

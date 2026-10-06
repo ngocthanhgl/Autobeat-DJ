@@ -294,13 +294,13 @@ object HarmonicSort {
     fun topUp(player: Player, deps: Deps, current: () -> Player? = { player }) {
         if (!_active.value) return
         if (worker?.isActive == true) return
-        startWorker(deps, current)
+        startWorker(deps, current, reason = "topup")
     }
 
-    private fun startWorker(deps: Deps, current: () -> Player?, tapId: Long = 0) {
+    private fun startWorker(deps: Deps, current: () -> Player?, tapId: Long = 0, reason: String = "toggle") {
         val myGeneration = generation
         worker = deps.scope.launch {
-            TrackLog.d("Autobeat", "harmonic worker started #$tapId", null)
+            TrackLog.d("Autobeat", "harmonic worker started #$tapId ($reason)", null)
             drainLoop(deps, current, myGeneration)
         }
     }
@@ -317,6 +317,14 @@ object HarmonicSort {
     private suspend fun drainLoop(deps: Deps, current: () -> Player?, myGeneration: Int) {
         while (true) {
             if (myGeneration != generation) return
+            // Belt and suspenders with the atomic stand-down above: a worker
+            // carrying a live generation while the sort reads off is a
+            // phantom by definition (topUp raced the teardown) — park it
+            // before it measures or moves anything.
+            if (!_active.value) {
+                TrackLog.d("Autobeat", "harmonic phantom worker parked (sort off)", null)
+                return
+            }
             val live = current() ?: return
             extendScope(live)
             publishProgress(live, deps)
@@ -422,11 +430,18 @@ object HarmonicSort {
      */
     fun cancelAndRestore(player: Player) {
         generation++
+        // Active clears FIRST, before the worker reference is nulled: topUp
+        // checks _active before worker, so any queue change landing between
+        // here and the cancel below sees sort-off and stands down instead
+        // of launching a phantom worker with the fresh generation (which
+        // drainLoop would then accept, silently sorting while the UI
+        // reports off — the untraced "#0" workers from the field log).
+        val wasActive = _active.value
+        _active.value = false
         worker?.cancel()
         worker = null
         TrackLog.d("Autobeat", "harmonic stand-down: restoring pre-sort order", null)
-        if (_active.value) restore(player)
-        _active.value = false
+        if (wasActive) restore(player)
         _progress.value = null
     }
 

@@ -219,6 +219,30 @@ class DoubleTimeGuardTest {
         assertEquals("D major", fixed.key)
     }
 
+    /**
+     * Children anchor (session-11 ground truth: F minor, device read A
+     * minor): squared Temperley F-minor shape overrules a wrong contested
+     * native A minor. Same construction as the D-major test above, so the
+     * margin clears the overrule floor by the same mechanics. Pins the
+     * collapse fix at the Kotlin seam — the native Pearson/weighting fix
+     * itself has no in-repo harness, so this is the regression tripwire.
+     */
+    private fun fMinorDecisiveChroma(): List<Double> {
+        val template = listOf(5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0)
+        val rotated = List(12) { p -> template[(p + 12 - 5) % 12] }
+        val squared = rotated.map { it * it }
+        val sum = squared.sum()
+        return squared.map { it / sum }
+    }
+
+    @Test
+    fun `f-minor-shaped chroma overrules a wrong contested a-minor`() {
+        val fixed = TrackFeatures.correctKey(
+            features(100.0, 0.6, 0.0, 200.0, emptyList(), key = "A minor", keyConfidence = 0.2, chroma = fMinorDecisiveChroma()),
+        )
+        assertEquals("F minor", fixed.key)
+    }
+
     @Test
     fun `coin-flip contest keeps the native read`() {
         // Near-flat ramp: every template correlates weakly and the top two

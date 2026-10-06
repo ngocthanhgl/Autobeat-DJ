@@ -53,7 +53,11 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.math.sqrt
 import java.util.Locale
 
 /**
@@ -2134,6 +2138,11 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
      * beat so the phase stands; downbeats re-snap onto the halved grid the
      * same way the tracker builds them. Every evaluation logs: a decline is
      * data for the next retune, not silence.
+     *
+     * Returns null when the grid loses a non-octave conflict to the DSP
+     * (see [guardMismatchGrid]): `leading` then falls back to the DSP tempo,
+     * confidence and downbeats together, instead of riding a grid whose rate
+     * disagrees with everything else by a third.
      */
     private fun guardModelGrid(
         grid: BeatTracker.Grid,
@@ -2141,13 +2150,18 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
         trackId: String,
         windowStart: Double,
         windowEnd: Double,
-    ): BeatTracker.Grid {
+    ): BeatTracker.Grid? {
         val modelBpm = grid.bpm
         if (modelBpm > TrackFeatures.DOUBLE_TIME_GUARD_BPM) {
             val dspBpm = dsp.bpm
             if (!(dspBpm > 0)) return grid
             val ratio = modelBpm / dspBpm
-            if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) return grid
+            // Outside the octave band this is not an octave error — fall
+            // through to the non-octave mismatch arbitration below instead
+            // of waving the grid through.
+            if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) {
+                return guardMismatchGrid(grid, dsp, trackId, windowStart, windowEnd)
+            }
             val windowBeats = grid.beats.count { it >= windowStart && it < windowEnd }
             val windowOnsets = dsp.onsetTimes.count { it >= windowStart && it < windowEnd }
             if (windowBeats < 8 || windowOnsets == 0) {
@@ -2184,7 +2198,11 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             val dspBpm = dsp.bpm
             if (!(dspBpm > 0)) return grid
             val ratio = dspBpm / modelBpm
-            if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) return grid
+            // Same fall-through as the double arm above: outside the octave
+            // band this is a non-octave conflict, not a half-read.
+            if (ratio < MODEL_DOUBLE_RATIO_MIN || ratio > MODEL_DOUBLE_RATIO_MAX) {
+                return guardMismatchGrid(grid, dsp, trackId, windowStart, windowEnd)
+            }
             val windowBeats = grid.beats.count { it >= windowStart && it < windowEnd }
             val windowOnsets = dsp.onsetTimes.count { it >= windowStart && it < windowEnd }
             if (windowBeats < 8 || windowOnsets == 0) {
@@ -2208,7 +2226,82 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
                 downbeats = grid.downbeats,
             )
         }
+        // Middle band (or anything the octave arms declined): non-octave
+        // model/DSP conflicts arbitrate here, agreement keeps the model.
+        return guardMismatchGrid(grid, dsp, trackId, windowStart, windowEnd)
+    }
+
+    /**
+     * Non-octave model/DSP conflict arbitration (session-11 Alors on danse:
+     * model 159.3 vs dsp 120.0, ratio 1.33 — between unison and the octave
+     * band, so both arms above wave it through and `leading` then takes the
+     * model unconditionally).
+     *
+     * Evidence is beat-phase coherence of the DSP onset train modulo each
+     * candidate interval: at the true tempo onsets cluster on the grid, at a
+     * wrong tempo they scatter — sound for any ratio, with no density
+     * reference to tune per genre. The DSP wins only on decisive evidence
+     * ([COHERENCE_MARGIN]); ties and thin windows keep the model (status
+     * quo). A DSP win returns null so bpm, confidence and downbeats all
+     * fall back to DSP together — rescaling model beats to a foreign rate
+     * would invent phase.
+     */
+    private fun guardMismatchGrid(
+        grid: BeatTracker.Grid,
+        dsp: TrackFeatures.Features,
+        trackId: String,
+        windowStart: Double,
+        windowEnd: Double,
+    ): BeatTracker.Grid? {
+        val modelBpm = grid.bpm
+        val dspBpm = dsp.bpm
+        if (!(dspBpm > 0) || !(modelBpm > 0)) return grid
+        val ratio = modelBpm / dspBpm
+        if (ratio >= MISMATCH_AGREE_MIN && ratio <= MISMATCH_AGREE_MAX) {
+            TrackLog.d(TAG, "model-grid mismatch: $trackId model $modelBpm vs dsp $dspBpm agree (ratio $ratio)")
+            return grid
+        }
+        val modelInterval = grid.beatInterval
+        val dspInterval = 60.0 / dspBpm
+        if (!(modelInterval > 0) || !(dspInterval > 0)) return grid
+        val modelCoh = phaseCoherence(dsp.onsetTimes, modelInterval, windowStart, windowEnd)
+        val dspCoh = phaseCoherence(dsp.onsetTimes, dspInterval, windowStart, windowEnd)
+        if (dspCoh > modelCoh + COHERENCE_MARGIN) {
+            TrackLog.d(TAG, "model-grid mismatch: $trackId model $modelBpm (coh $modelCoh) vs dsp $dspBpm (coh $dspCoh) -> dsp (grid dropped)")
+            return null
+        }
+        TrackLog.d(TAG, "model-grid mismatch: $trackId model $modelBpm (coh $modelCoh) vs dsp $dspBpm (coh $dspCoh) kept (no decisive dsp evidence)")
         return grid
+    }
+
+    /**
+     * Mean resultant length of onset phases modulo [interval] over the
+     * window: 1.0 = every onset lands on the same grid offset, 0.0 =
+     * uniform scatter (or an empty window). The phase origin is arbitrary —
+     * resultant length is translation-invariant — so the window start
+     * anchors it. Harmonics-safe by construction: a 2x grid folds onsets
+     * onto alternating 0/0.5 phases whose vectors cancel toward 0.
+     */
+    private fun phaseCoherence(
+        onsets: List<Double>,
+        interval: Double,
+        windowStart: Double,
+        windowEnd: Double,
+    ): Double {
+        if (!(interval > 0)) return 0.0
+        var sx = 0.0
+        var sy = 0.0
+        var n = 0
+        for (o in onsets) {
+            if (o < windowStart || o >= windowEnd) continue
+            val wrapped = (((o - windowStart) % interval) + interval) % interval / interval
+            val angle = wrapped * 2 * PI
+            sx += cos(angle)
+            sy += sin(angle)
+            n++
+        }
+        if (n == 0) return 0.0
+        return sqrt(sx * sx + sy * sy) / n
     }
 
     fun release() {
@@ -2273,6 +2366,24 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
          * halftime subdivision.
          */
         const val MODEL_SPARSE_KEEP_PER_BEAT = 3.0
+        /**
+         * Non-octave agreement band for [guardMismatchGrid]: estimator jitter
+         * is a few percent, so a model/DSP ratio inside 0.80–1.25 is
+         * agreement and keeps the model. Outside it (session-11 Alors on
+         * danse sat at 1.33) is a genuine conflict arbitrated by
+         * beat-phase coherence — never by the incomparable confidence
+         * scales of the two estimators.
+         */
+        const val MISMATCH_AGREE_MIN = 0.80
+        const val MISMATCH_AGREE_MAX = 1.25
+        /**
+         * Decisive-evidence margin for the coherence arbitration above: the
+         * DSP onset train must concentrate on the DSP grid this much more
+         * than on the model grid before a window's grid is dropped. Small
+         * enough to catch real 4/3-type errors, large enough that swing and
+         * shuffle feels (split vectors) never flip a healthy grid.
+         */
+        const val COHERENCE_MARGIN = 0.05
         const val PRIORITY_NORMAL = 0
 
         /**
