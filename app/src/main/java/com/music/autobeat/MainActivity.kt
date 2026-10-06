@@ -85,6 +85,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -722,6 +723,7 @@ private fun AutobeatApp(
     val player = rememberPlayerState(controller)
     var queueNotice by remember { mutableStateOf<QueueActionNotice?>(null) }
     var queueNoticeId by remember { mutableIntStateOf(0) }
+    var harmonicTapId by remember { mutableLongStateOf(0L) }
     val showQueueNotice: (String) -> Unit = { message ->
         queueNoticeId += 1
         queueNotice = QueueActionNotice(queueNoticeId, message)
@@ -734,6 +736,13 @@ private fun AutobeatApp(
     val shuffleEnabled by QueueShuffle.enabled.collectAsStateWithLifecycle()
     val harmonicEnabled by HarmonicSort.active.collectAsStateWithLifecycle()
     val harmonicProgress by HarmonicSort.progress.collectAsStateWithLifecycle()
+    // Swallowed-toggle notices from the service side (nothing ahead, empty
+    // scope): the toggle command is fire-and-forget, so this flow is the
+    // only way a dead tap explains itself on screen.
+    val harmonicNotice by HarmonicSort.lastNotice.collectAsStateWithLifecycle()
+    LaunchedEffect(harmonicNotice) {
+        harmonicNotice?.let { showQueueNotice(it.second) }
+    }
     val harmonicVibe by AppSettings.harmonicVibe.collectAsStateWithLifecycle()
     val preferMusicOnly by AppSettings.preferMusicOnly.collectAsStateWithLifecycle()
     // A conversion is deliberately scoped to the current listening session.
@@ -1804,10 +1813,19 @@ private fun AutobeatApp(
             harmonicProgress = harmonicProgress,
             harmonicVibe = harmonicVibe,
             onToggleHarmonic = {
+                // Tap-chain id: one tap, one id, logged at every layer down
+                // to the worker, so a dead toggle is traceable end to end in
+                // the final session log.
+                harmonicTapId += 1
+                val tapId = harmonicTapId
                 // UI-side probe: proves the tap left the button, so a missing
                 // service line means the command died on the way, not the tap.
-                TrackLog.d("Autobeat", "harmonic tap (controller=${controller != null})", null)
-                controller?.toggleHarmonic()
+                TrackLog.d("Autobeat", "harmonic tap #$tapId (controller=${controller != null})", null)
+                if (controller == null) {
+                    showQueueNotice("Player not ready, try again")
+                } else {
+                    controller.toggleHarmonic(tapId)
+                }
             },
             onSelectHarmonicVibe = { controller?.setHarmonicVibe(it) },
             onCycleRepeat = {

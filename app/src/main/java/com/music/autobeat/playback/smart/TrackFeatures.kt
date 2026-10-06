@@ -24,6 +24,7 @@ package com.music.autobeat.playback.smart
 import com.music.autobeat.data.TrackLog
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import kotlin.math.sqrt
 
 /**
@@ -102,9 +103,11 @@ object TrackFeatures {
      * tunes against these two anchors, not theory.
      */
     fun correctKey(features: Features, trackId: String = ""): Features {
+        // The contest line itself lives in adjudicateKey (single voice, all
+        // three outcomes); this stays silent so an overrule is not logged
+        // twice with two different wordings.
         val label = adjudicateKey(features.chroma, features.key, features.keyConfidence, trackId)
         if (label == features.key) return features
-        TrackLog.d(TAG, "key contest${tag(trackId)}: native ${features.key} (${features.keyConfidence}) overruled by temperley $label")
         return features.copy(key = label)
     }
 
@@ -120,15 +123,24 @@ object TrackFeatures {
         if (keyConfidence >= KEY_CONTESTED_CONFIDENCE) return key
         val native = parseKeyLabel(key) ?: return key
         val (root, mode, margin) = estimateKeyTemperley(chroma) ?: return key
-        if (root == native.first && mode == native.second) return key
+        // The full contest, all three outcomes, contested-only (conf < 0.5):
+        // agreement used to return silently, which sealed the worst misses —
+        // Children/Axel F read wrong WITH Temperley concurrence and left no
+        // line at all. The chroma vector rides along so the scorer retune
+        // reads the collapse off the final log instead of needing another.
+        val vector = chroma.joinToString(",", "[", "]") { "%.3f".format(Locale.ROOT, it) }
+        if (root == native.first && mode == native.second) {
+            TrackLog.d(TAG, "key contest${tag(trackId)}: native $key ($keyConfidence) agrees with temperley $root/$mode (margin $margin) chroma=$vector")
+            return key
+        }
         if (margin < KEY_OVERRULE_MARGIN) {
-            TrackLog.d(TAG, "key contest${tag(trackId)}: native $key ($keyConfidence) vs temperley $root/$mode kept native (margin $margin)")
+            TrackLog.d(TAG, "key contest${tag(trackId)}: native $key ($keyConfidence) vs temperley $root/$mode kept native (margin $margin) chroma=$vector")
             return key
         }
         // Retune feed: the overrule margin is the number the next round sets
         // KEY_OVERRULE_MARGIN from — a log of keeps alone cannot show where
         // the decisive contests actually land.
-        TrackLog.d(TAG, "key contest${tag(trackId)}: native $key ($keyConfidence) overruled by temperley $root/$mode (margin $margin)")
+        TrackLog.d(TAG, "key contest${tag(trackId)}: native $key ($keyConfidence) overruled by temperley $root/$mode (margin $margin) chroma=$vector")
         return TEMPERLEY_ROOT_NAMES[root] + if (mode == 0) " major" else " minor"
     }
 

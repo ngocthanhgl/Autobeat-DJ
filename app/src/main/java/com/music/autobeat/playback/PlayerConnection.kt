@@ -135,11 +135,13 @@ fun MediaController.toggleShuffle() {
 /**
  * Routes Harmonic Sort through the playback service for the same reason:
  * the measuring, the snapshot, and the reorder all live where the queue does.
+ * [tapId] chains one UI tap to its service-side fate in the log.
  */
-fun MediaController.toggleHarmonic() {
+fun MediaController.toggleHarmonic(tapId: Long = 0L) {
+    val args = Bundle().apply { putLong(EXTRA_HARMONIC_TAP_ID, tapId) }
     sendCustomCommand(
         SessionCommand(ACTION_TOGGLE_HARMONIC, Bundle.EMPTY),
-        Bundle.EMPTY,
+        args,
     )
 }
 

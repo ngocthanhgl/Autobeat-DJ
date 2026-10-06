@@ -142,6 +142,9 @@ const val ACTION_SET_HARMONIC_VIBE = "com.music.autobeat.action.SET_HARMONIC_VIB
 /** The vibe's enum name travelling with [ACTION_SET_HARMONIC_VIBE]. */
 const val EXTRA_HARMONIC_VIBE = "Autobeat.harmonic.vibe"
 
+/** Tap-chain id travelling with ACTION_TOGGLE_HARMONIC: one tap, one id, end to end. */
+const val EXTRA_HARMONIC_TAP_ID = "Autobeat.harmonic.tapId"
+
 /** Session command used by the media notification's Shuffle button. */
 const val ACTION_TOGGLE_SHUFFLE = "com.music.autobeat.action.TOGGLE_SHUFFLE"
 
@@ -1010,6 +1013,13 @@ class PlaybackService : MediaLibraryService() {
                         HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
                         current = { player },
                     )
+                    // The window slides on playlist change even when the
+                    // worker is busy: republish the count so the pill tracks
+                    // the live window instead of freezing mid-measure.
+                    HarmonicSort.refreshProgress(
+                        exoPlayer,
+                        HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+                    )
                 }
                 updateAnalysisPriority(exoPlayer)
             }
@@ -1819,13 +1829,14 @@ class PlaybackService : MediaLibraryService() {
         mediaSession?.setCustomLayout(notificationButtons())
     }
 
-    private fun toggleHarmonicFromSession() {
+    private fun toggleHarmonicFromSession(args: Bundle) {
+        val tapId = args.getLong(EXTRA_HARMONIC_TAP_ID, 0L)
         val exoPlayer = player
         // Logged either way: a tap with no player and no record is the
         // hardest no-op to diagnose, and this is where it would hide.
         TrackLog.d(
             "Autobeat",
-            "harmonic command: " + if (exoPlayer == null) {
+            "harmonic command #$tapId: " + if (exoPlayer == null) {
                 "no session player"
             } else {
                 "count=${exoPlayer.mediaItemCount} current=${exoPlayer.currentMediaItemIndex}"
@@ -1838,6 +1849,7 @@ class PlaybackService : MediaLibraryService() {
             ep,
             HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
             current = { player },
+            tapId = tapId,
         )
     }
 
@@ -2346,6 +2358,12 @@ class PlaybackService : MediaLibraryService() {
                 exoPlayer,
                 HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
                 current = { player },
+            )
+            // Same slide-no- playlist-change case as above: republish even
+            // while the worker is parked or busy.
+            HarmonicSort.refreshProgress(
+                exoPlayer,
+                HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
             )
         }
 
@@ -5850,7 +5868,7 @@ class PlaybackService : MediaLibraryService() {
             when (customCommand.customAction) {
                 ACTION_TOGGLE_AUTOPLAY -> toggleAutoplayFromNotification()
                 ACTION_TOGGLE_SHUFFLE -> toggleShuffleFromSession()
-                ACTION_TOGGLE_HARMONIC -> toggleHarmonicFromSession()
+                ACTION_TOGGLE_HARMONIC -> toggleHarmonicFromSession(args)
                 ACTION_SET_HARMONIC_VIBE -> setHarmonicVibeFromSession(args)
                 ACTION_START_STATION -> startStationFromSession()
                 ACTION_REVERT_TO_ORIGINAL -> revertCurrentToOriginal()

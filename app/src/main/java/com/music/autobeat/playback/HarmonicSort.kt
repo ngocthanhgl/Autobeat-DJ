@@ -191,6 +191,16 @@ object HarmonicSort {
     private val _progress = MutableStateFlow<Progress?>(null)
     val progress: StateFlow<Progress?> = _progress.asStateFlow()
 
+    /**
+     * One-shot user notice for a swallowed toggle tap: (tapId, message). The
+     * toggle command is fire-and-forget, so a tap that dies service-side
+     * (nothing ahead, empty scope) would otherwise leave the pill unflipped
+     * with no explanation. The UI collects this and toasts it. Null while
+     * no notice is pending.
+     */
+    private val _lastNotice = MutableStateFlow<Pair<Long, String>?>(null)
+    val lastNotice: StateFlow<Pair<Long, String>?> = _lastNotice.asStateFlow()
+
     /** Media ids in their pre-sort order. Empty while the sort is off. */
     private var original: List<String> = emptyList()
     /**
@@ -227,10 +237,10 @@ object HarmonicSort {
      * it started from. Defaults to the player handed in, which is what the
      * synchronous callers already hold.
      */
-    fun toggle(player: Player, deps: Deps, current: () -> Player? = { player }) {
+    fun toggle(player: Player, deps: Deps, current: () -> Player? = { player }, tapId: Long = 0) {
         TrackLog.d(
             "Autobeat",
-            "harmonic toggle: active=${_active.value} shuffle=${QueueShuffle.enabled.value} " +
+            "harmonic toggle #$tapId: active=${_active.value} shuffle=${QueueShuffle.enabled.value} " +
                 "count=${player.mediaItemCount} current=${player.currentMediaItemIndex}",
             null,
         )
@@ -251,14 +261,17 @@ object HarmonicSort {
         if (from >= player.mediaItemCount) {
             TrackLog.w(
                 "Autobeat",
-                "harmonic toggle: nothing ahead (from=$from count=${player.mediaItemCount})",
+                "harmonic toggle #$tapId: nothing ahead (from=$from count=${player.mediaItemCount})",
                 null,
             )
+            _lastNotice.value = tapId to "Nothing ahead to sort"
             return
         }
         original = List(player.mediaItemCount) { player.getMediaItemAt(it).mediaId }
         val scopeIds = original.drop(from).take(MAX_SORT_AHEAD)
         if (scopeIds.isEmpty()) {
+            TrackLog.w("Autobeat", "harmonic toggle #$tapId: empty scope, standing down", null)
+            _lastNotice.value = tapId to "Nothing available to sort"
             original = emptyList()
             return
         }
@@ -269,7 +282,7 @@ object HarmonicSort {
         _active.value = true
         _progress.value = Progress(0, scopeIds.size)
         generation++
-        startWorker(deps, current)
+        startWorker(deps, current, tapId)
     }
 
     /**
@@ -284,10 +297,10 @@ object HarmonicSort {
         startWorker(deps, current)
     }
 
-    private fun startWorker(deps: Deps, current: () -> Player?) {
+    private fun startWorker(deps: Deps, current: () -> Player?, tapId: Long = 0) {
         val myGeneration = generation
         worker = deps.scope.launch {
-            TrackLog.d("Autobeat", "harmonic worker started", null)
+            TrackLog.d("Autobeat", "harmonic worker started #$tapId", null)
             drainLoop(deps, current, myGeneration)
         }
     }
@@ -311,16 +324,19 @@ object HarmonicSort {
                 // Flush a debounced apply before parking: otherwise the last
                 // landing's order never reaches the queue.
                 if (sortApplyPending) maybeApplySort(live, deps, force = true)
-                TrackLog.d("Autobeat", "harmonic worker parked, window measured", null)
+                val window = upcomingIds(live).take(MAX_SORT_AHEAD)
+                val capped = window.filter { (attempted[it] ?: 0) >= MAX_ATTEMPTS }
+                TrackLog.w("Autobeat", "harmonic worker parked, window measured (capped=$capped)", null)
                 return
             }
             if (myGeneration != generation) return
             // Guarded per track: one unmeasurable id must not take the
             // others down with it, silently or otherwise.
+            val attemptNo = (attempted[next] ?: 0) + 1
             runCatching { ensureAnalysed(current(), deps, next) }
                 .onFailure {
                     if (it is CancellationException) throw it
-                    TrackLog.w("Autobeat", "harmonic track $next failed: ${it.message}", it, null)
+                    TrackLog.w("Autobeat", "harmonic track $next failed (attempt $attemptNo): ${it.message}", it, null)
                 }
             attempted[next] = (attempted[next] ?: 0) + 1
             if (myGeneration != generation) return
@@ -378,6 +394,25 @@ object HarmonicSort {
         val window = upcomingIds(player).take(MAX_SORT_AHEAD)
         if (window.isEmpty()) return
         _progress.value = Progress(window.count { deps.analyzer.analysisFor(it).isUsable }, window.size)
+    }
+
+    /**
+     * Re-reads the live window and republishes the count even while the
+     * worker is busy deep inside a 90 s [ensureAnalysed]: the window slides
+     * on every advance, but progress otherwise only publishes at drain-loop
+     * edges, so the pill froze mid-busy (the stuck-13/20). Called from the
+     * track-advance wakes alongside [topUp]; no-op while the sort is off.
+     */
+    fun refreshProgress(player: Player, deps: Deps) {
+        if (!_active.value) return
+        val window = upcomingIds(player).take(MAX_SORT_AHEAD)
+        TrackLog.d(
+            "Autobeat",
+            "harmonic progress refresh: done=${window.count { deps.analyzer.analysisFor(it).isUsable }} " +
+                "total=${window.size} worker=${if (worker?.isActive == true) "busy" else "parked"}",
+            null,
+        )
+        publishProgress(player, deps)
     }
 
     /**
