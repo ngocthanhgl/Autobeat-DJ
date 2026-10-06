@@ -197,8 +197,8 @@ class ReverbProcessor : BaseAudioProcessor() {
     companion object {
         private const val TAG = "AutobeatReverb"
 
-        /** Matches the echo send: a send, not an instrument. −9 dB at max. */
-        private const val MAX_WET = 0.34f
+        /** A wash must read as space, not room tone. −7 dB at max. */
+        private const val MAX_WET = 0.45f
 
         /**
          * Dry-compensation slope, mirroring the echo send so the series stack

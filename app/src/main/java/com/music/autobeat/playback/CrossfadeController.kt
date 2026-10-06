@@ -4210,7 +4210,7 @@ class CrossfadeController(
      */
     private fun rideDjSend(progress: Float) {
         if (render.echoThrow && render.echoAmount > 0.0 && render.echoBeatSeconds > 0.0) {
-            // P3 convergence: on long beds the throw arms earlier (from 0.35,
+            // P3 convergence: on long beds the throw arms earlier (from 0.30,
             // inaudible) so space is already in the room before the last
             // phrase — short blends keep the punchy 0.55 attack.
             // P3 (triple-choke fix): the vacuum at 0.97 chokes dry AND wet
@@ -4220,11 +4220,12 @@ class CrossfadeController(
             // attack regardless of bed length; a singing tail keeps the late
             // attack so the throw never washes over words.
             val attackStart =
-                if (render.overlapSeconds >= 16.0 || duckA.env < 0.25f) 0.35f else 0.55f
+                if (render.overlapSeconds >= 16.0 || duckA.env < 0.25f) 0.30f else 0.55f
             val attack = ((progress - attackStart) / (0.70f - attackStart)).coerceIn(0f, 1f)
             // P3: the echo fraction shortens toward the drop (beat → half
             // beat past 0.8) — the tail hurries instead of smearing across
-            // the landing.
+            // the landing. FX-audibility: quiet tails earn the 0.30 attack on
+            // any bed length so the dub is heard before the vacuum, not under it.
             val beatSec = render.echoBeatSeconds.toFloat() *
                 if (progress > 0.8f) 0.5f else 1f
             // DJ-literature landing: the dub tail must clear before the drop

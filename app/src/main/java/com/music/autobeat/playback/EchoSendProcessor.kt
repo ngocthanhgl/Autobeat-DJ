@@ -143,10 +143,10 @@ class EchoSendProcessor : BaseAudioProcessor() {
         private const val TAG = "AutobeatEchoSend"
 
         /** Repeats sit under dry: this is a send, not an instrument. −6 dB at max. */
-        private const val MAX_WET = 0.50f
+        private const val MAX_WET = 0.65f
 
-        /** Each repeat keeps this much of itself. ~4 audible tails per throw. */
-        private const val FEEDBACK = 0.38f
+        /** Each repeat keeps this much of itself. DJM-class dub tails. */
+        private const val FEEDBACK = 0.55f
 
         /**
          * Dry-compensation slope: dry scales by (1 − wet·DRY_COMP) as the send

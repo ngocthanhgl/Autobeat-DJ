@@ -2070,12 +2070,19 @@ private fun throwWetFor(): Double = AppSettings.djIntensity.value.throwWet
  * [BLEND_REVERB_WET].
  */
 private fun washWetFor(): Double = AppSettings.djIntensity.value.washWet
+/**
+ * Default bed-wash scale: blends that earn neither a throw nor a breakdown
+ * wash still get space in the room, at half the voiced wet.
+ */
+private const val BED_WASH_SCALE = 0.5
 
 /**
  * DJ send-effect selector (F1 throw / F3 wash, DJ-only): which, if any, send
  * effect voices the outgoing tail of a DJ_BLEND/DJ_FILTER. Returns
  * echoThrow + wash reverb wet. Evidence-gated: unknown masks answer none,
- * keeping blends that cannot prove a vocal tail exactly as dry as before.
+ * keeping blends that cannot prove a vocal tail exactly as dry as before;
+ * every other blend gets at least the half-wet bed wash so no DJ blend
+ * ever runs bone-dry.
  */
 private fun djSendEffectFor(
     analysis: TrackAnalysis,
@@ -2128,7 +2135,14 @@ private fun djSendEffectFor(
         val crushScale = if (crushed) AppSettings.djIntensity.value.crushFloor else 1.0
         return false to washWetFor() * crushScale
     }
-    return false to 0.0
+    // FX-audibility: the default bed wash. A DJ mixer always has some space
+    // in the room — blends that earn neither a throw nor a breakdown wash
+    // used to run bone-dry, which is exactly the flat crossfade listeners
+    // hear. Half the voiced wet keeps the glue under the vocals instead of
+    // on top of them; crushed masters keep the same gain-staging as above.
+    val crushedBed = analysis.dynamicRangeDb in 0.01..5.0 && analysis.peakDbfs > -3.0
+    val crushBedScale = if (crushedBed) AppSettings.djIntensity.value.crushFloor else 1.0
+    return false to washWetFor() * BED_WASH_SCALE * crushBedScale
 }
 
 /**
