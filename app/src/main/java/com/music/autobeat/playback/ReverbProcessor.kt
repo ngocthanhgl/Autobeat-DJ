@@ -37,6 +37,16 @@ class ReverbProcessor : BaseAudioProcessor() {
     private var channelCount = 0
     private var sampleRate = 0
     private var currentWet: Float = 0f
+    private var isFloatInput: Boolean = false
+
+    /** Runtime reverb-wash wet cap from the current DJ intensity. */
+    private var maxWet: Float = 0.5f
+    /** Runtime comb feedback: 0.80 LOW / 0.84 MEDIUM / 0.88 HIGH. */
+    private var combFeedback: Float = 0.84f
+    /** Runtime allpass feedback: 0.48 LOW / 0.50 MEDIUM / 0.52 HIGH. */
+    private var allpassFeedback: Float = 0.5f
+    /** Runtime dry-compensation slope: 0.30 LOW / 0.25 MEDIUM / 0.20 HIGH. */
+    private var dryComp: Float = 0.25f
 
     private var combs = Array(0) { FloatArray(0) }
     private var combPos = IntArray(0)
@@ -55,12 +65,26 @@ class ReverbProcessor : BaseAudioProcessor() {
      * call every fade tick.
      */
     fun setReverb(wet: Float, freeze: Boolean) {
-        targetWet = wet.coerceIn(0f, MAX_WET)
+        targetWet = wet.coerceIn(0f, maxWet)
         frozen = freeze
     }
 
     /** Rides the wet down and unfreezes; the tail drains rather than cutting. */
     fun open() = setReverb(0f, false)
+
+    /**
+     * Re-aims the runtime reverb character to the current DJ intensity.
+     * [maxWet] is the per-intensity reverb wet factor (floored at 0.45), and
+     * the comb/allpass feedback + dry-comp follow the same rung. Idempotent —
+     * call whenever [com.music.autobeat.data.settings.AppSettings.djIntensity]
+     * changes.
+     */
+    fun applyIntensity(maxWet: Float, combFeedback: Float, allpassFeedback: Float, dryComp: Float) {
+        this.maxWet = maxWet.coerceAtLeast(0.45f)
+        this.combFeedback = combFeedback
+        this.allpassFeedback = allpassFeedback
+        this.dryComp = dryComp
+    }
 
     /** Wipes every line. Seeks only — never call mid-transition. */
     fun clear() {
@@ -73,16 +97,20 @@ class ReverbProcessor : BaseAudioProcessor() {
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount < 1) {
+        val fmt = inputAudioFormat
+        val supported = fmt.encoding == C.ENCODING_PCM_16BIT ||
+            fmt.encoding == C.ENCODING_PCM_FLOAT
+        if (!supported || fmt.channelCount < 1) {
             TrackLog.w(
                 TAG,
-                "Reverb send inactive: encoding=${inputAudioFormat.encoding} " +
-                    "channels=${inputAudioFormat.channelCount} is not 16-bit PCM",
+                "Reverb send inactive: encoding=${fmt.encoding} " +
+                    "channels=${fmt.channelCount} is not PCM 16-bit/float",
             )
             return AudioProcessor.AudioFormat.NOT_SET
         }
-        channelCount = inputAudioFormat.channelCount
-        sampleRate = inputAudioFormat.sampleRate
+        channelCount = fmt.channelCount
+        sampleRate = fmt.sampleRate
+        isFloatInput = fmt.encoding == C.ENCODING_PCM_FLOAT
         combs = Array(COMB_DELAYS_MS.size) { i ->
             FloatArray(msToFrames(COMB_DELAYS_MS[i]) * channelCount)
         }
@@ -140,7 +168,7 @@ class ReverbProcessor : BaseAudioProcessor() {
             val wet = currentWet
             repeat(block) {
                 for (channel in 0 until channelCount) {
-                    val dry = inputBuffer.short.toFloat()
+                    val dry = if (isFloatInput) inputBuffer.float else inputBuffer.short.toFloat()
                     // Darkened feed: highs excite the combs' metallic modes
                     // far more than they contribute body; the dry path keeps
                     // the full spectrum, only the tail input is rolled off.
@@ -156,7 +184,7 @@ class ReverbProcessor : BaseAudioProcessor() {
                         // Full-audit F3: decaying freeze (0.92), never unity — a
                         // pinned 1.0 sustains indefinitely until the stepped
                         // close and has clipped terrifyingly loud before.
-                        val feedback = if (freeze) 0.92f else COMB_FEEDBACK
+                        val feedback = if (freeze) 0.92f else combFeedback
                         line[pos * channelCount + channel] = input + delayed * feedback
                         acc += delayed
                     }
@@ -167,14 +195,17 @@ class ReverbProcessor : BaseAudioProcessor() {
                         val pos = allpassPos[a]
                         val delayed = line[pos * channelCount + channel]
                         // Allpass: y = -g·x + delayed; line = x + g·delayed.
-                        val out = -ALLPASS_FEEDBACK * acc + delayed
-                        line[pos * channelCount + channel] = acc + ALLPASS_FEEDBACK * delayed
+                        val out = -allpassFeedback * acc + delayed
+                        line[pos * channelCount + channel] = acc + allpassFeedback * delayed
                         acc = out
                     }
                     // Gain-staged send, mirroring the echo: dry ducks as the tail
                     // rises so dense sustained input can't push the sum into
                     // the hard clip. Unity when parked, ~0.92 dry at max wet.
-                    outputBuffer.putShort(clampToShort(dry * (1f - wet * DRY_COMP) + acc * wet))
+                    val out = dry * (1f - wet * dryComp) + acc * wet
+                    if (isFloatInput) outputBuffer.putFloat(out) else outputBuffer.putShort(
+                        out.coerceIn(Short.MIN_VALUE.toFloat(), Short.MAX_VALUE.toFloat()).toInt().toShort()
+                    )
                 }
                 for (i in combs.indices) {
                     combPos[i] = (combPos[i] + 1) % (combs[i].size / channelCount)
@@ -218,7 +249,7 @@ class ReverbProcessor : BaseAudioProcessor() {
         private const val INPUT_DARKEN_HZ = 5500f
 
         private const val BYTES_PER_SAMPLE = 2
-        private const val GLIDE_FRAMES = 64
+        private const val GLIDE_FRAMES = 32
         private const val GLIDE_RATE = 0.05f
         private const val SETTLED_WET = 0.001f
     }

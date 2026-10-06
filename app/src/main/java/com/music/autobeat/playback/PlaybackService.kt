@@ -541,12 +541,6 @@ class PlaybackService : MediaLibraryService() {
     private var activeEq: DJBandEQ = djEqA
     private var spareEq: DJBandEQ = djEqB
 
-    // DJ effects: brake/dive
-    private val brakeDiveA = BrakeDiveProcessor()
-    private val brakeDiveB = BrakeDiveProcessor()
-    private var activeBrakeDive: BrakeDiveProcessor = brakeDiveA
-    private var spareBrakeDive: BrakeDiveProcessor = brakeDiveB
-
     /** Automix's DSP analyzer — see [com.music.autobeat.playback.smart.TrackAnalyzer]. */
     private val trackAnalyzer = com.music.autobeat.playback.smart.TrackAnalyzer(this, AudioCache)
 
@@ -1502,7 +1496,6 @@ class PlaybackService : MediaLibraryService() {
             reverbSendA,
             spliceGuardA,
             loudnessA,
-            brakeDiveA,
             ownsSession = true,
         )
         val sparePlayer = buildPlayer(
@@ -1515,7 +1508,6 @@ class PlaybackService : MediaLibraryService() {
             reverbSendB,
             spliceGuardB,
             loudnessB,
-            brakeDiveB,
             ownsSession = false,
         )
         player = exoPlayer
@@ -1686,13 +1678,6 @@ class PlaybackService : MediaLibraryService() {
                     activeLoudness.setGainDb(gainDb)
 
                 override fun open() = Unit
-            },
-            brakeDiveFilters = object : BrakeDiveFilters {
-                override fun outgoing(amount: Float) =
-                    activeBrakeDive.setBrake(amount)
-                override fun setBackspin(enabled: Boolean) { activeBrakeDive.setBackspin(enabled) }
-                override fun spinTo(phase: Float, grabs: Int) { activeBrakeDive.spinTo(phase, grabs) }
-                override fun ride() = activeBrakeDive.ride()
             },
             analysisRunningFor = { item -> trackAnalyzer.isAnalysing(item.mediaId) },
         )
@@ -2183,10 +2168,9 @@ class PlaybackService : MediaLibraryService() {
         reverb: ReverbProcessor,
         splice: SpliceGuardProcessor,
         loudness: LoudnessGainProcessor,
-        brake: BrakeDiveProcessor,
         ownsSession: Boolean,
     ): ExoPlayer = ExoPlayer.Builder(this)
-        .setRenderersFactory(silenceSkippingRenderers(eq, spatial, equalizer, filter, loop, echo, reverb, splice, loudness, brake))
+        .setRenderersFactory(silenceSkippingRenderers(eq, spatial, equalizer, filter, loop, echo, reverb, splice, loudness))
         .setMediaSourceFactory(requireNotNull(mediaSourceFactory))
         .setLoadControl(farBufferingLoadControl())
         .setAudioAttributes(AUDIO_ATTRIBUTES, /* handleAudioFocus = */ ownsSession)
@@ -2236,9 +2220,6 @@ class PlaybackService : MediaLibraryService() {
         val heldLoudness = activeLoudness
         activeLoudness = spareLoudness
         spareLoudness = heldLoudness
-        val heldBrake = activeBrakeDive
-        activeBrakeDive = spareBrakeDive
-        spareBrakeDive = heldBrake
         incoming.addListener(playbackListener)
         incoming.addAnalyticsListener(formatListener)
 
@@ -4785,7 +4766,6 @@ class PlaybackService : MediaLibraryService() {
         reverb: ReverbProcessor,
         splice: SpliceGuardProcessor,
         loudness: LoudnessGainProcessor,
-        brake: BrakeDiveProcessor,
     ) = object : DefaultRenderersFactory(this) {
         init {
             // Do not force PCM_FLOAT onto an OEM speaker mixer merely because
@@ -4828,15 +4808,14 @@ class PlaybackService : MediaLibraryService() {
                 DefaultAudioSink.DefaultAudioProcessorChain(
                     // DJ-gated chain order (stock parks at unity/bypass so
                     // audible Automix is unchanged — see P0 audit — but DJ EQ,
-                    // sweep, vamp, echo, reverb, splice, loudness and brake
-                    // must actually see samples; wiring only 3 of 10 muted all
+                    // sweep, vamp, echo, reverb, splice and loudness
+                    // must actually see samples; wiring only 3 of 9 muted all
                     // DJ voicing):
                     // DJBandEQ (low/mid/high, head) -> Spatial -> Listener EQ
                     // -> TransitionFilter (LP/HP sweep, last word) -> LoopVamp
                     // -> EchoSend -> Reverb -> SpliceGuard -> LoudnessGain
-                    // -> BrakeDive (tape-stop after loudness so correction
-                    // doesn't fight the dive) -> SilenceSkip -> Sonic.
-                    arrayOf(eq, spatial, equalizer, transition, loop, echo, reverb, splice, loudness, brake),
+                    // -> SilenceSkip -> Sonic.
+                    arrayOf(eq, spatial, equalizer, transition, loop, echo, reverb, splice, loudness),
                     SilenceSkippingAudioProcessor(
                         MIN_SILENCE_US,
                         SilenceSkippingAudioProcessor.DEFAULT_SILENCE_RETENTION_RATIO,
@@ -4945,7 +4924,6 @@ class PlaybackService : MediaLibraryService() {
             reverbSendA,
             spliceGuardA,
             loudnessA,
-            brakeDiveA,
             ownsSession = true,
         )
         val newSpare = buildPlayer(
@@ -4958,7 +4936,6 @@ class PlaybackService : MediaLibraryService() {
             reverbSendB,
             spliceGuardB,
             loudnessB,
-            brakeDiveB,
             ownsSession = false,
         )
         player = newActive

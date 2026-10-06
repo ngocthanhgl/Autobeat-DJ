@@ -38,6 +38,14 @@ class EchoSendProcessor : BaseAudioProcessor() {
     private var channelCount = 0
     private var sampleRate = 0
     private var currentWet: Float = 0f
+    private var isFloatInput: Boolean = false
+
+    /** Runtime echo-throw wet cap from the current DJ intensity. */
+    private var maxWet: Float = 0.5f
+    /** Runtime feedback: 0.50 LOW / 0.55 MEDIUM / 0.60 HIGH. */
+    private var feedback: Float = 0.55f
+    /** Runtime dry-compensation slope: 0.30 LOW / 0.25 MEDIUM / 0.20 HIGH. */
+    private var dryComp: Float = 0.25f
 
     /** Interleaved circular line, per channel. */
     private var line = FloatArray(0)
@@ -50,12 +58,24 @@ class EchoSendProcessor : BaseAudioProcessor() {
      * negative delay parks the line length at one frame (harmless: wet gates it).
      */
     fun setEcho(wet: Float, delaySeconds: Float) {
-        targetWet = wet.coerceIn(0f, MAX_WET)
+        targetWet = wet.coerceIn(0f, maxWet)
         this.delaySeconds = delaySeconds.coerceAtLeast(0f)
     }
 
     /** Rides the wet down; the line keeps ringing until it decays. */
     fun open() = setEcho(0f, delaySeconds)
+
+    /**
+     * Re-aims the runtime send character to the current DJ intensity. The
+     * [maxWet] is the per-intensity echo wet factor (floored at 0.5), and the
+     * feedback / dry-comp follow the same rung. Idempotent — call whenever
+     * [com.music.autobeat.data.settings.AppSettings.djIntensity] changes.
+     */
+    fun applyIntensity(maxWet: Float, feedback: Float, dryComp: Float) {
+        this.maxWet = maxWet.coerceAtLeast(0.5f)
+        this.feedback = feedback
+        this.dryComp = dryComp
+    }
 
     /** Wipes the line. Seeks only — never call mid-transition. */
     fun clear() {
@@ -65,16 +85,20 @@ class EchoSendProcessor : BaseAudioProcessor() {
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT || inputAudioFormat.channelCount < 1) {
+        val fmt = inputAudioFormat
+        val supported = fmt.encoding == C.ENCODING_PCM_16BIT ||
+            fmt.encoding == C.ENCODING_PCM_FLOAT
+        if (!supported || fmt.channelCount < 1) {
             TrackLog.w(
                 TAG,
-                "Echo send inactive: encoding=${inputAudioFormat.encoding} " +
-                    "channels=${inputAudioFormat.channelCount} is not 16-bit PCM",
+                "Echo send inactive: encoding=${fmt.encoding} " +
+                    "channels=${fmt.channelCount} is not PCM 16-bit/float",
             )
             return AudioProcessor.AudioFormat.NOT_SET
         }
-        channelCount = inputAudioFormat.channelCount
-        sampleRate = inputAudioFormat.sampleRate
+        channelCount = fmt.channelCount
+        sampleRate = fmt.sampleRate
+        isFloatInput = fmt.encoding == C.ENCODING_PCM_FLOAT
         lineFrames = (MAX_DELAY_SECONDS * sampleRate).toInt().coerceAtLeast(1)
         line = FloatArray(lineFrames * channelCount)
         writePos = 0
@@ -94,7 +118,7 @@ class EchoSendProcessor : BaseAudioProcessor() {
     }
 
     override fun queueInput(inputBuffer: java.nio.ByteBuffer) {
-        val bytesPerFrame = BYTES_PER_SAMPLE * channelCount
+        val bytesPerFrame = if (isFloatInput) FLOAT_BYTES_PER_SAMPLE * channelCount else BYTES_PER_SAMPLE * channelCount
         if (bytesPerFrame == 0 || lineFrames == 0) return
         val frameCount = inputBuffer.remaining() / bytesPerFrame
         if (frameCount == 0) return
@@ -121,13 +145,13 @@ class EchoSendProcessor : BaseAudioProcessor() {
             repeat(block) {
                 val readPos = (writePos - delayFrames + lineFrames) % lineFrames
                 for (channel in 0 until channelCount) {
-                    val dry = inputBuffer.short.toFloat()
+                    val dry = if (isFloatInput) inputBuffer.float else inputBuffer.short.toFloat()
                     val delayed = line[readPos * channelCount + channel]
-                    line[writePos * channelCount + channel] = dry + delayed * FEEDBACK
-                    // Gain-staged send: dry ducks as the repeats rise, so a hot
-                    // tail can never stack past full scale into the hard clip.
-                    // Unity when parked (wet = 0), ~0.88 dry at max wet.
-                    outputBuffer.putShort(clampToShort(dry * (1f - wet * DRY_COMP) + delayed * wet))
+                    line[writePos * channelCount + channel] = dry + delayed * feedback
+                    val out = dry * (1f - wet * dryComp) + delayed * wet
+                    if (isFloatInput) outputBuffer.putFloat(out) else outputBuffer.putShort(
+                        out.coerceIn(Short.MIN_VALUE.toFloat(), Short.MAX_VALUE.toFloat()).toInt().toShort()
+                    )
                 }
                 writePos = (writePos + 1) % lineFrames
             }
@@ -160,7 +184,8 @@ class EchoSendProcessor : BaseAudioProcessor() {
         private const val MAX_DELAY_SECONDS = 4.5f
 
         private const val BYTES_PER_SAMPLE = 2
-        private const val GLIDE_FRAMES = 64
+        private const val FLOAT_BYTES_PER_SAMPLE = 4
+        private const val GLIDE_FRAMES = 32
         private const val GLIDE_RATE = 0.05f
         private const val SETTLED_WET = 0.001f
     }

@@ -24,7 +24,6 @@ package com.music.autobeat.playback.smart
 
 import com.music.autobeat.data.TrackLog
 import com.music.autobeat.data.settings.AppSettings
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -235,7 +234,9 @@ fun contentSelectsCut(
 ): Boolean {
     val outClear = hasVocalEvidence(out) && !vocalCoversWindow(out, windowStart, windowEnd)
     val inClear = hasVocalEvidence(incoming) && !vocalCoversWindow(incoming, windowStart, windowEnd)
-    return !(outClear && inClear)
+    // Only cut if evidence appears on BOTH sides and both are clear.
+    // If ANY side missing evidence or uncertain, prefer wash (return false).
+    return outClear && inClear
 }
 
 /** Hard safety net no transition may exceed, however generous its budget. */
@@ -402,32 +403,6 @@ data class TransitionPlan(
      * everywhere else (normal Automix renders stock dry).
      */
     val echoThrow: Boolean = false,
-    /**
-     * DJ brake (F2): dive the outgoing deck rate toward a stop over the last
-     * quarter of the blend instead of gliding it home. DJ-only.
-     */
-    val brake: Boolean = false,
-    /**
-     * Booth backspin (DJ-only): the outgoing deck spins back over an
-     * energy-scaled window ([spinSeconds], 1.5..2.5 s) into
-     * a hard cut that lands the incoming track on its trusted drop at full
-     * energy — the booth punctuation for a heavy lift across a proven key
-     * clash. Implies [brake] + [echoThrow] (½-beat dub tail); the renderer
-     * sizes the dive window off [spinSeconds]. False everywhere else.
-     */
-    val backspin: Boolean = false,
-    /**
-     * Backspin window length in seconds, scaled from the outgoing tail's
-     * energy (1.5 on a soft exit, 2.5 on a peak one). A real booth pull lasts
-     * 2-3 s; the old fixed 1 s never gave the ear time to feel the rewind.
-     */
-    val spinSeconds: Double = 1.0,
-    /**
-     * Human multi-grab: 1 = one decisive pull, 2-3 = the hand re-grabbing
-     * mid-spin (a Humanize draw, pair-stable). Voiced in the sweep phase
-     * mapping, never in the timing.
-     */
-    val spinGrabs: Int = 1,
     /** Blueprint §5.7 LOOP_CUT_DROP: how many bars of the outgoing tail loop before the freeze. */
     val loopBars: Int = 0,
     /** Blueprint §5.7 LOOP_CUT_DROP: where the incoming track lands, on its own timeline. */
@@ -847,8 +822,6 @@ private fun heavyClashPlan(
         // arrives. (The central choke would do it anyway; stating it here
         // keeps the plan self-describing.)
         volumeCurve = VolumeCurve.LOGARITHMIC,
-        // Booth vinyl brake into big slowdowns, same as the echo-out.
-        brake = brakeForSlowdown(mixset, analysis, nextAnalysis),
         policyReasons = reasons,
         reason = if (started) "smart-heavy-clash-echo" else "before-heavy-clash",
     )
@@ -940,100 +913,6 @@ private fun hardCutPlan(
         phaseOffsetSec = if (cueDown != null) cue - cueDown else 0.0,
         policyReasons = policyReasons,
         reason = if (started) "smart-hard-cut" else "before-hard-cut-window",
-    )
-}
-
-/**
- * Booth backspin (DJ-only): the outgoing deck plays to the phrase end, spins
- * back over its last [TransitionPlan.spinSeconds], and hard-cuts onto the incoming
- * track's trusted drop at full energy. Typed LOOP_CUT_DROP with loopBars = 0:
- * an honest cut onto a drop with no vamp — the spin IS the transition — so
- * the guaranteed-blend floor (which exempts LOOP_CUT_DROP, not HARD_CUT)
- * lets the energy-scaled pre-roll stand. Rendered with the HARD_CUT style (open
- * filters, stepped volume, 1-beat LP sweep into the flip) and no vamp (the
- * vamp keys off loopBars). The renderer compresses the brake dive to the
- * spin window, rings a ½-beat dub tail on the outgoing channel while it
- * spins, and flips on the downbeat.
- */
-private fun backspinPlan(
-    analysis: TrackAnalysis,
-    nextAnalysis: TrackAnalysis,
-    length: Double,
-    nextLength: Double,
-    playbackTime: Double,
-    mixAnchor: Double,
-    dropTime: Double,
-    score: CompatibilityScore,
-    policyReasons: List<String>,
-    mixset: Boolean = false,
-): TransitionPlan {
-    val beatSeconds = analysis.beatInterval.orZero().takeIf { it > 0 }
-        ?: if (analysis.bpm.orZero() > 0) 60 / analysis.bpm else 0.5
-    val cutAt = mixAnchor.coerceIn(0.0, length)
-    // Energy-scaled window: a hotter exit earns a longer pull (1.5..2.5 s).
-    // A real booth spinback reads at 2-3 s; 1 s never lets the ear feel it.
-    val fullSpinSeconds = spinSecondsFor(analysis, cutAt)
-    var spinStart = (
-        nearestTimedValue(analysis.downbeats, cutAt - fullSpinSeconds, tolerance = beatSeconds * 2)
-            ?: (cutAt - fullSpinSeconds)
-        ).coerceIn(0.0, cutAt)
-    // Sung tail: a reverse sweep over singing reads as a mistake, so a sung
-    // window gets a SHORTER spin (down to 0.8 s), never a silent downgrade to
-    // a brake — the hand still pulls, it just clears the vocal faster.
-    val sungDensity = vocalActivityBetween(analysis, spinStart, cutAt) ?: 0.0
-    val spinSeconds = if (sungDensity >= 0.3) {
-        val shortened = (fullSpinSeconds * (1.0 - 0.5 * sungDensity)).coerceAtLeast(0.8)
-        spinStart = (
-            nearestTimedValue(analysis.downbeats, cutAt - shortened, tolerance = beatSeconds * 2)
-                ?: (cutAt - shortened)
-            ).coerceIn(0.0, cutAt)
-        shortened
-    } else {
-        fullSpinSeconds
-    }
-    // The drop is the landing: keep it clear of the track tail.
-    val maxCue = nextLength - MIN_INCOMING_CLEARANCE_SECONDS
-    val cue = if (nextLength > 0 && maxCue >= 0) dropTime.coerceIn(0.0, maxCue) else dropTime
-    val started = playbackTime >= spinStart
-    val cueDown = nearestTimedValue(nextAnalysis.downbeats, cue, tolerance = beatSeconds)
-    val fadeSeconds = (cutAt + 0.1 - spinStart).coerceAtLeast(0.1)
-    return TransitionPlan(
-        shouldStart = started,
-        markerVisible = true,
-        transitionStart = spinStart,
-        transitionEnd = cutAt + 0.1,
-        fadeSeconds = fadeSeconds,
-        transitionStyle = TransitionStyle.HARD_CUT,
-        type = TransitionType.LOOP_CUT_DROP,
-        score = score,
-        backspin = true,
-        spinSeconds = spinSeconds,
-        brake = true,
-        echoThrow = true,
-        echoAmount = throwWetFor(),
-        // ½-beat dub tail on the outgoing channel while it spins.
-        echoPeriodBeats = BACKSPIN_ECHO_PERIOD_BEATS,
-        // No vamp: the spin replaces it. loopBars = 0 is the honest cut.
-        loopBars = 0,
-        dropCueTime = cue,
-        incomingCueTime = cue,
-        incomingHandoffTime = cue,
-        incomingPlaybackRate = 1.0,
-        transitionBeats = ((cutAt - spinStart) / beatSeconds).roundToInt().coerceAtLeast(1),
-        volumeCurve = VolumeCurve.INSTANT,
-        eqCurve = EQCurve.NONE,
-        filterSweep = 1.0,
-        overlapSeconds = fadeSeconds,
-        phaseOffsetSec = if (cueDown != null) cue - cueDown else 0.0,
-        // No key shift: the pair is provably unblendable, the spin covers the
-        // seam keylock-off and the drop lands at its native pitch.
-        keyShiftSemitones = 0,
-        policyReasons = if (sungDensity >= 0.3) {
-            policyReasons + "spin-shortened-sung=%.2f".format(Locale.ROOT, spinSeconds)
-        } else {
-            policyReasons
-        },
-        reason = if (started) "smart-backspin-drop" else "before-backspin-window",
     )
 }
 
@@ -1138,9 +1017,6 @@ private fun echoOutPlan(
         // Full-audit P1 M4: one-bar repeats on the outgoing grid — not the
         // half-beat dub the renderer's default rule would voice.
         echoPeriodBeats = 1.0,
-        // Booth vinyl brake into big slowdowns: pitch-dip the outgoing
-        // into the echo while the new tempo waits on the downbeat.
-        brake = brakeForSlowdown(mixset, analysis, nextAnalysis),
         incomingCueTime = cue,
         incomingHandoffTime = handoff,
         incomingPlaybackRate = 1.0,
@@ -2147,113 +2023,6 @@ private fun djSendEffectFor(
     return false to washWetFor() * BED_WASH_SCALE * crushBedScale
 }
 
-/**
- * DJ brake selector (F2, DJ-only): a pair that would need a >6% tempo ride
- * gets punctuation instead — brake the outgoing out, drop the incoming on
- * the one. Literature reserves the brake for large gaps, not blends a pitch
- * ride could hold.
- */
-private fun brakeFor(mixset: Boolean, incomingPlaybackRate: Double, overlapSeconds: Double): Boolean {
-    if (!mixset || !overlapSeconds.isFinite() || overlapSeconds < 8.0) return false
-    val rate = incomingPlaybackRate.takeIf { it.isFinite() && it > 0.0 } ?: 1.0
-    return rate > 1.06 || rate < 0.94
-}
-
-/**
- * Booth vinyl brake (DJ-only): the incoming tempo falls far below the
- * outgoing one (raw, unfolded ratio — an octave-adjacent 174→128 still
- * brakes), so pitch-dip the outgoing into the echo instead of blending
- * across a gap no ride can hold. The renderer voices it keylock-off
- * (pitch falls with the rate), exactly the booth gesture. Speedups ride
- * the echo/cut dry — a brake reads as a slowdown, never a lift.
- */
-private fun brakeForSlowdown(
-    mixset: Boolean,
-    analysis: TrackAnalysis,
-    nextAnalysis: TrackAnalysis,
-): Boolean {
-    if (!mixset) return false
-    val bpmOut = analysis.bpm.orZero()
-    val bpmIn = nextAnalysis.bpm.orZero()
-    if (bpmOut <= 0 || bpmIn <= 0) return false
-    return bpmIn / bpmOut < 0.85
-}
-
-/** Heavy-lift floor for a backspin: the raw speedup ratio past keylock comfort. */
-private const val BACKSPIN_MIN_LIFT_RATIO = 1.04
-/** Backspin pre-roll: scaled from the outgoing tail's energy, 1.5..2.5 s. */
-private fun spinSecondsFor(analysis: TrackAnalysis, anchor: Double): Double {
-    val curve = analysis.energyCurve
-    if (curve.isNullOrEmpty()) return 2.0
-    // Tail 8 s before the anchor: a hotter exit earns a longer pull.
-    val tail = curve.filter { it.time.isFinite() && it.time in (anchor - 8.0)..anchor }
-    val pool = if (tail.size >= 4) tail else curve
-    val energies = pool.map { it.energy }.filter { it.isFinite() && it >= 0.0 }
-    if (energies.isEmpty()) return 2.0
-    val mean = energies.sum() / energies.size
-    val max = energies.max().coerceAtLeast(1e-6)
-    return 1.5 + 1.0 * (mean / max).coerceIn(0.0, 1.0)
-}
-/** Backspin dub tail on the outgoing channel while it spins (½ beat). */
-private const val BACKSPIN_ECHO_PERIOD_BEATS = 0.5
-
-/**
- * Booth backspin selector (DJ-only): a heavy LIFT across a proven key clash
- * gets a spin-back into the incoming drop instead of a blend no ride can
- * hold. Five gates, all evidence-gated — unknown on any axis answers false:
- *
- * 1. DJ Mode ([mixset]).
- * 2. Track2 is faster ([bpmIn] > [bpmOut]) AND the gap is heavy
- *    ([BACKSPIN_MIN_LIFT_RATIO]): a spin reads as a lift, never a slowdown —
- *    slowdowns keep [brakeForSlowdown].
- * 3. Both keys trusted (non-blank) and NOT [harmonicallyCompatible]: the pair
- *    is provably unblendable, not merely unmeasured.
- * 4. Peak energy ([isPeakEnergyAt]) at the outgoing exit AND the incoming
- *    drop: spins out of/into anything less break the emotional arc.
- * 5. The caller passes a trusted drop ([dropInB] with [isDropTrusted]) — the
- *    incoming track lands on its peak, never on a guess.
- */
-private fun backspinFor(
-    mixset: Boolean,
-    analysis: TrackAnalysis,
-    nextAnalysis: TrackAnalysis,
-    mixAnchor: Double,
-    dropInB: Double,
-): Boolean {
-    if (!mixset) return false
-    val bpmOut = analysis.bpm.orZero()
-    val bpmIn = nextAnalysis.bpm.orZero()
-    if (bpmOut <= 0 || bpmIn <= 0) return false
-    if (bpmIn <= bpmOut) return false
-    if (bpmIn / bpmOut < BACKSPIN_MIN_LIFT_RATIO) return false
-    val keyOut = trustedKey(analysis)
-    val keyIn = trustedKey(nextAnalysis)
-    if (keyOut.isBlank() || keyIn.isBlank()) return false
-    // HIGH intensity drops the key-clash veto: a booth spin-back reads on a
-    // compatible pair too. Lower rungs keep the provably-unblendable gate.
-    if (AppSettings.djIntensity.value.backspinRequiresKeyClash &&
-        harmonicallyCompatible(keyOut, keyIn, true)
-    ) return false
-    if (!isPeakEnergyAt(analysis, mixAnchor)) return false
-    if (!isPeakEnergyAt(nextAnalysis, dropInB)) return false
-    return true
-}
-
-/**
- * P1: wildcard-backspin gate. The planner's [backspinFor] demands a trusted
- * drop because a planned spin LANDS on it; a wildcard spin lands on the
- * blend's own cue, so the drop gates don't apply — but the musical core
- * does: peak energy at the exit (a spin out of a breakdown is a glitch, not
- * punctuation) and no vocal under the hand (a scratch over singing is
- * heckling). Unknown on either axis answers false, same contract as
- * [backspinFor]. Called from the humanizer, which only runs in DJ mode.
- */
-internal fun spinPunctuationOk(out: TrackAnalysis, exitSec: Double, spinSeconds: Double): Boolean {
-    if (!isPeakEnergyAt(out, exitSec)) return false
-    val sung = vocalActivityBetween(out, exitSec - spinSeconds, exitSec) ?: return false
-    return sung < 0.3
-}
-
 private fun plannedVocalOverlap(
     analysis: TrackAnalysis,
     nextAnalysis: TrackAnalysis,
@@ -2265,18 +2034,39 @@ private fun plannedVocalOverlap(
     val outgoingSpan = transitionEnd - transitionStart
     if (outgoingSpan <= 0.0 || !outgoingSpan.isFinite()) return 0.0
     val rate = incomingPlaybackRate.takeIf { it.isFinite() && it > 0 } ?: 1.0
-    // Rewrite Phase 2: unknown reads as DIRTY, never clean. A missing mask
-    // (or an unmeasured side) must summon the duel/choke/separation, not
-    // stand down every vocal defense at once. Only a measured-clean window
-    // returns 0.0.
-    return simultaneousVocalFraction(
-        outgoing = analysis,
-        incoming = nextAnalysis,
-        outStart = transitionStart,
-        outEnd = transitionEnd,
-        inStart = incomingCueTime,
-        rate = rate,
-    ) ?: 1.0
+    // Rewrite Phase 2: silence-only masks never count as evidence — a mask that
+    // only shrugs (every bucket below the vocal gate) reads as uncertain, not
+    // clear, and pulls the overlap to 1.0. Only both sides carrying plain
+    // positive fill keeps the overlap at 0.0 or a measured value; anything
+    // else is treated as uncertain.
+    val bothHavePositiveFill = hasPlainVocalEvidence(analysis, transitionStart, transitionEnd) &&
+        hasPlainVocalEvidence(nextAnalysis, incomingCueTime, incomingCueTime + outgoingSpan)
+    return if (bothHavePositiveFill) {
+        simultaneousVocalFraction(
+            outgoing = analysis,
+            incoming = nextAnalysis,
+            outStart = transitionStart,
+            outEnd = transitionEnd,
+            inStart = incomingCueTime,
+            rate = rate,
+        ) ?: 0.0
+    } else {
+        1.0
+    }
+}
+
+/**
+ * Whether a track carries plain positive vocal evidence over [start]..[end]:
+ * a mask bucket at or above [VOCAL_ACTIVE_THRESHOLD] (a singing bucket) or a
+ * confirmed analyzer vocal span. Silence-only masks — buckets only below the
+ * vocal gate, including the affirmatively clean ceiling — never count; they
+ * are uncertainty, never proof of a clean voice.
+ */
+private fun hasPlainVocalEvidence(a: TrackAnalysis, start: Double, end: Double): Boolean {
+    if (a.firstVocalSec != null || a.lastVocalSec != null) return true
+    val mask = a.vocalActivityMask
+    if (mask.isEmpty()) return false
+    return mask.any { it.isFinite() && it >= VOCAL_ACTIVE_THRESHOLD }
 }
 
 private fun nearestAtOrBefore(values: List<Double>, target: Double): Double? =
@@ -2557,8 +2347,8 @@ private fun phraseSwitch(
     ) as? WsolaPlanResult.Planned ?: return null
 
     val overlap = planned.transitionEnd - planned.transitionStart
-    // DJ effects (F1/F2/F3): a vocal tail earns an echo throw, a breakdown
-    // exit earns a reverb wash, a >6% tempo gap earns a brake. Evidence-gated;
+    // DJ effects (F1/F3): a vocal tail earns an echo throw, a breakdown
+    // exit earns a reverb wash. Evidence-gated;
     // anything unproven renders exactly as dry as before.
     val (throwFire, washWet) = djSendEffectFor(
         analysis = analysis,
@@ -2614,11 +2404,6 @@ private fun phraseSwitch(
         echoAmount = if (throwFire && mixset) throwWetFor() else 0.0,
         echoThrow = throwFire && mixset,
         echoPeriodBeats = if (throwFire && mixset) 1.0 else null,
-        brake = brakeFor(
-            mixset = mixset,
-            incomingPlaybackRate = planned.stretchRatio,
-            overlapSeconds = overlap,
-        ),
         // Automix reverb: a bed of reverb under the EQ swap glues the two
         // grids. DJ Mode keeps its dry handoff, plus the wash bed (F3) when
         // the outgoing tail expires into a breakdown.
@@ -3040,7 +2825,13 @@ private fun planTransitionInner(
         if (!mixset) {
             // Stock upstream: tail fade at equal power, cued at first sound.
             val transitionStart = max(0.0, mixAnchor - standardFade)
-            val started = playbackTime >= transitionStart
+    val started = playbackTime >= transitionStart
+    // Style follows the key evidence, not just the grid: a FILTER_SWEEP
+    // matrix verdict (clash-evidenced) renders under DJ_FILTER (sweep +
+    // mid-kill) even when the grids hold — rendering it as DJ_BLEND voiced
+    // the FILTER EQ tables plus separation/proactive at once (double carve).
+    val forceFilterStyle = mixset && selectedType == TransitionType.FILTER_SWEEP
+    val renderBlend = sameBeatBlend && !forceFilterStyle
             return TransitionPlan(
                 shouldStart = started,
                 markerVisible = true,
@@ -3244,22 +3035,6 @@ private fun planTransitionInner(
             firstQuietGapSec(analysis, outStart, mixAnchor) == null &&
             firstVocalStartSec(nextAnalysis, proxyEntry, inEnd) != null
     }
-    // Booth backspin (DJ-only): the most specific punctuation fires first — a
-    // heavy lift across a proven key clash with peak energy on both decks and
-    // a trusted drop to land on. Anything unproven falls through to the
-    // matrix below; a backspin is never forced.
-    val dropB = dropInB
-    if (mixset && realDropInB && dropB != null && dropB.isFinite() &&
-        backspinFor(mixset, analysis, nextAnalysis, mixAnchor, dropB)
-    ) {
-        return applyMixsetFireFloor(
-            backspinPlan(
-                analysis, nextAnalysis, length, nextLength,
-                playbackTime, mixAnchor, dropB, proxyScore, policy.reasons, mixset,
-            ),
-            length, mixset,
-        )
-    }
     if (vocalWallToWall) {
         val beatOutA = analysis.beatInterval.orZero().takeIf { it > 0 }
             ?: if (analysis.bpm.orZero() > 0) 60 / analysis.bpm else 0.5
@@ -3384,7 +3159,10 @@ private fun planTransitionInner(
             length, mixset,
         )
     }
-    if (mixset && selectedType == TransitionType.LOOP_CUT_DROP && dropInB != null) {
+    // A cut on a phantom drop is a guess with a knife: LOOP_CUT_DROP needs
+    // a TRUSTED drop, not just a fallback max-RMS guess. Untrusted falls
+    // through to an honest blend below instead of a mistimed slam.
+    if (mixset && selectedType == TransitionType.LOOP_CUT_DROP && realDropInB && dropInB != null) {
         // The 4-bar vamp plus 2-bar freeze needs room: at least 8 bars of
         // tail below the anchor. Without it the loop is a fiction, and an
         // honest cut beats a muddy short blend on a double-high pair.
@@ -3428,18 +3206,8 @@ private fun planTransitionInner(
     }
     if (mixset && selectedType == TransitionType.HARD_CUT) {
         // Booth manners: a naked cut slams on peak-to-peak pairs, so the cut
-        // only stands as a same-file skip proxy (handled above). With a
-        // trusted drop the outgoing deck backspins onto it; otherwise the
-        // pair washes out on echo instead of chopping.
-        if (dropInB != null) {
-            return applyMixsetFireFloor(
-                backspinPlan(
-                    analysis, nextAnalysis, length, nextLength,
-                    playbackTime, mixAnchor, dropInB, proxyScore, policy.reasons, mixset,
-                ),
-                length, mixset,
-            )
-        }
+        // only stands as a same-file skip proxy (handled above). Anything
+        // else washes out on echo instead of chopping.
         return applyMixsetFireFloor(
             washPlan(
                 analysis, nextAnalysis, length, nextLength,
@@ -3736,8 +3504,8 @@ private fun planTransitionInner(
         0
     }
     val started = playbackTime >= transitionStart
-    // DJ effects (F1/F2/F3), same selector as phraseSwitch: vocal tail earns
-    // a throw, breakdown exit a wash, >6% tempo gap a brake. Unproven = dry.
+    // DJ effects (F1/F3), same selector as phraseSwitch: vocal tail earns
+    // a throw, breakdown exit a wash. Unproven = dry.
     val (throwFireAdaptive, washWetAdaptive) = djSendEffectFor(
         analysis = analysis,
         nextAnalysis = nextAnalysis,
@@ -3762,7 +3530,7 @@ private fun planTransitionInner(
         pickupSeconds = pickupSeconds,
         transitionBeats = transitionBeats,
         bassSwap = sameBeatBlend || hasBassContent,
-        transitionStyle = if (sameBeatBlend) TransitionStyle.DJ_BLEND else TransitionStyle.DJ_FILTER,
+        transitionStyle = if (renderBlend) TransitionStyle.DJ_BLEND else TransitionStyle.DJ_FILTER,
         // Full-audit P1 M2: the type follows the matrix decision, not the
         // grid accident. Re-deriving SMOOTH-vs-FILTER from sameBeatBlend here
         // rendered HARMONIC-matrix pairs under the FILTER EQ schedule (and
@@ -3778,7 +3546,7 @@ private fun planTransitionInner(
         keyShiftSemitones = keyShift,
         volumeCurve = VolumeCurve.S_CURVE,
         eqCurve = if (mixset) {
-            if (sameBeatBlend) EQCurve.BASS_SWAP else EQCurve.EQ_SWAP
+            if (renderBlend) EQCurve.BASS_SWAP else EQCurve.EQ_SWAP
         } else {
             EQCurve.NONE
         },
@@ -3787,7 +3555,7 @@ private fun planTransitionInner(
         // pair has no shared grid to hand anything over on and instead pulls the
         // outgoing track behind a closing low-pass. Left at zero on the blend
         // branch so the renderer doesn't do both at once.
-        filterSweep = if (sameBeatBlend) 0.0 else FILTER_SWEEP,
+        filterSweep = if (renderBlend) 0.0 else FILTER_SWEEP,
         vocalOverlap = plannedVocalOverlap(
             analysis = analysis,
             nextAnalysis = nextAnalysis,
@@ -3798,16 +3566,10 @@ private fun planTransitionInner(
         ),
         policyReasons = policy.reasons,
         reason = if (started) "smart-duration" else "before-smart-duration",
-        // DJ echo throw (F1) + brake (F2): voiced through the echo send /
-        // the outgoing deck rate. Zero when unproven.
+        // DJ echo throw (F1): voiced through the echo send. Zero when unproven.
         echoAmount = if (throwFireAdaptive && mixset) throwWetFor() else 0.0,
         echoThrow = throwFireAdaptive && mixset,
         echoPeriodBeats = if (throwFireAdaptive && mixset) 1.0 else null,
-        brake = brakeFor(
-            mixset = mixset,
-            incomingPlaybackRate = incomingPlaybackRate,
-            overlapSeconds = alignedOverlap,
-        ),
         // Automix reverb: same bed as the phrase-switch blend. DJ Mode keeps
         // its dry handoff, plus the wash bed (F3) on breakdown exits.
         reverbAmount = if (mixset) washWetAdaptive else 0.0,

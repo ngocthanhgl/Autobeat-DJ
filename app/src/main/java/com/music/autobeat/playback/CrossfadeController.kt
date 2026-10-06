@@ -286,11 +286,6 @@ class CrossfadeController(
      */
     private val loudnessGains: LoudnessGains = LoudnessGains.None,
     /**
-     * The brake/dive effect on the outgoing deck. Defaults to
-     * [BrakeDiveFilters.None] which renders no speed change.
-     */
-    private val brakeDiveFilters: BrakeDiveFilters = BrakeDiveFilters.None,
-    /**
      * Whether a decode and inference for a media item is running right now.
      * Only feeds the stats line — nothing about a transition waits on it.
      */
@@ -480,23 +475,6 @@ class CrossfadeController(
          * so the tail rings past the handoff. DJ-only.
          */
         val echoThrow: Boolean = false,
-        /**
-         * DJ brake (F2): dive the outgoing deck rate toward a stop over the
-         * last quarter of the blend. driveFade voices it per tick. DJ-only.
-         */
-        val brake: Boolean = false,
-        /**
-         * Booth backspin (DJ-only): the same dive DSP as [brake], over the
-         * energy-scaled [spinSeconds] window with a steeper curve — a
-         * spin-back into the cut, not a long slowdown. Implied by the plan
-         * alongside brake + echoThrow; the cooldown strips all three
-         * together. [spinGrabs] stutters the sweep when the hand re-grabs.
-         */
-        val backspin: Boolean = false,
-        /** Booth backspin: spin window length in seconds, from the plan. */
-        val spinSeconds: Double = 1.0,
-        /** Booth backspin: 1 = single pull, 2-3 = re-grabbed stutter. */
-        val spinGrabs: Int = 1,
         /** DJ-EQ spec: false = leave both decks at unity (standard fades). */
         val eqEnabled: Boolean = false,
         /**
@@ -598,20 +576,11 @@ class CrossfadeController(
     private var lastInLow = 1f
     private var lastInMid = 1f
     private var lastInHigh = 1f
-    // DJ brake (F2): last committed brake rate, for coalesced per-tick ramps.
-    private var lastBrakeRate: Float = 1f
-    // Booth backspin: the spin-back dive occupies the energy-scaled tail of
-    // the outgoing deck (1.5..2.5 s from the plan), whatever the blend span.
-    // Longer than a brake by construction — a backspin plan is a real
-    // booth pull, never a 1 s blip.
     // F3 rotation: smart blends since the last effected one. The planner is
     // pure and cannot count, so this counter enforces the cooldown at Render
     // mapping. The window follows DJ intensity (LOW keeps the legacy 2).
     private var blendsSinceEffect: Int = AppSettings.djIntensity.value.effectCooldownBlends
-    // One-shot guard for the sung-tail spin-downgrade log above: reset at
-    // every handoff so each blend reports its own downgrade at most once.
-    private var spinDowngradeLogged = false
-    // Pair key the cooldown-strip log last fired for (same one-shot reason).
+    // Pair key the cooldown-strip log last fired for (one-shot per pair).
     private var stripLoggedPair: String? = null
     // v2 §7d/§11.2: downbeat-emphasis cursor into render.halfTimeEmphasis.
     // A pulse fires once per offset even across pause-parked ticks; the pulse
@@ -2123,7 +2092,7 @@ class CrossfadeController(
         )
         // F3 rotation: at most one effected blend per cooldown window
         // (DJ intensity). The planner is pure and cannot count
-        // past blends, so the controller strips throw/brake here when the
+        // past blends, so the controller strips the throw here when the
         // last effect was too recent. Normal Automix never carries effects.
         // Every strip is logged with its reason — a stripped move should be
         // visible in the session log, never a silent downgrade.
@@ -2133,7 +2102,7 @@ class CrossfadeController(
         // is open, so an unguarded log here would spam once per tick.
         val stripPair = "${currentItem.mediaId}->${nextItem.mediaId}"
         if (mixset && !effectAllowed && stripPair != stripLoggedPair &&
-            (plan.echoThrow || plan.brake || plan.backspin || plan.echoAmount > 0 || plan.reverbAmount > 0)
+            (plan.echoThrow || plan.echoAmount > 0 || plan.reverbAmount > 0)
         ) {
             stripLoggedPair = stripPair
             TrackLog.d(
@@ -2157,11 +2126,7 @@ class CrossfadeController(
                 vocalOverlap = plan.vocalOverlap,
                 volumeCurve = plan.volumeCurve,
                 echoAmount = plan.echoAmount,
-                echoThrow =
-                    // Full-audit F5: throw and brake never share a blend (a
-                    // braked deck under beat echo rings falling pitch) — brake
-                    // wins. Backspin keeps its designed triple-stack.
-                    plan.echoThrow && effectAllowed && (!plan.brake || plan.backspin),
+                echoThrow = plan.echoThrow && effectAllowed,
                 // v2 §7b: the dub throw repeats every HALF beat; a sync-less
                 // PLAIN pair gets a fixed 375 ms slapback instead of a grid it
                 // cannot hold.
@@ -2200,8 +2165,7 @@ class CrossfadeController(
                 outgoingPlaybackRate = plan.outgoingPlaybackRate,
                 reverbAmount =
                     // Full-audit F3b: the wash joins the effect rotation — at
-                    // most one effected blend per cooldown window, like throw
-                    // and brake. PLAIN_DISSOLVE keeps its deliberate ambience
+                    // most one effected blend per cooldown window, like throw. PLAIN_DISSOLVE keeps its deliberate ambience
                     // (it is a dissolve voice, not a rotating effect); the
                     // freeze flag follows the amount (voiced wet is zeroed).
                     if (plan.type == TransitionType.PLAIN_DISSOLVE || effectAllowed) {
@@ -2234,10 +2198,6 @@ class CrossfadeController(
                 // DJ Mode keeps the schedule ride.
                 eqEnabled = mixset,
                 mixset = mixset,
-                brake = plan.brake && effectAllowed,
-                backspin = plan.backspin && effectAllowed,
-                spinSeconds = plan.spinSeconds,
-                spinGrabs = plan.spinGrabs,
                 mixRecipe = mixRecipe,
                 duckAMids = duckAMids,
                 delayBMids = delayBMids,
@@ -2528,7 +2488,6 @@ class CrossfadeController(
         fadeMs = fade
         fadeEndMs = endMs
         smartFadeActive = smart
-        spinDowngradeLogged = false
         stripLoggedPair = null
         incomingCueTimeMs = cueTimeMs.coerceAtLeast(0L)
         incomingPlaybackRate = playbackRate
@@ -2544,7 +2503,6 @@ class CrossfadeController(
         lastCommittedRate = null
         lastRateCommitAt = 0L
         deckRateReset = false
-        lastBrakeRate = 1f
         // DJ echo throw (F1): a new arm takes the decks now — flush any tail
         // still waiting out its late retire, or the new standby would prepare
         // over a player that is still (silently) playing.
@@ -2613,7 +2571,7 @@ class CrossfadeController(
             TAG,
             "arm ${if (smart) "smart" else "standard"} fade=${fade}ms end=${endMs}ms " +
                 "cue=${incomingCueTimeMs}ms rate=$incomingPlaybackRate shift=${renderStyle.keyShiftSemitones} " +
-                "mixset=${renderStyle.mixset} brake=${renderStyle.brake} throw=${renderStyle.echoThrow} " +
+                "mixset=${renderStyle.mixset} throw=${renderStyle.echoThrow} " +
                 "style=${render.style} bassSwap=${render.bassSwap}@${render.bassSwapFraction} " +
                 "sweep=${render.filterSweep}",
         )
@@ -3186,12 +3144,6 @@ class CrossfadeController(
             (render.mixRecipe == MixRecipe.VOCAL_DUEL || render.mixRecipe == MixRecipe.INSTRUMENTAL_BED || (render.mixRecipe == MixRecipe.WASH_OUT && render.overlapSeconds >= 16f))
         if (levelRide) {
             player.volume = riseGain(inProgress)
-            // Full-audit F5: duck under the brake dive — a slowed deck stays
-            // present but yields instead of holding unity at falling pitch.
-            // Depth comes from the live brake tracker (1.0 = parked).
-            val speed = AppSettings.playbackSpeed.value
-            val diveDepth =
-                (1f - lastBrakeRate / speed.coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
             // P2: valley-masking on duels — the EQ story needs a small
             // coexistence pad or residual double-mid sits exposed at unity.
             // Up to -1.6 dB, breathed by the live sidechain, duel-only.
@@ -3200,7 +3152,7 @@ class CrossfadeController(
             } else {
                 1f
             }
-            out.volume = (1f - diveDepth * 0.6f) * duelPad
+            out.volume = duelPad
         }
         // P1 sidechain broadband: up to -5 dB per deck. A scales by B's
         // audibility (inProgress) — a solo vocal never ducks itself. D3: B
@@ -3278,13 +3230,12 @@ class CrossfadeController(
         }
         // P3 landing vacuum: at outProgress 0.97 both decks drop to a 150 ms
         // near-silence while the tails ring — the hole the drop lands in.
-        // Skipped when a brake/spin owns the ending (their envelope is the
-        // gesture) and on cut families (the flip is the gesture). finish()
+        // Skipped on cut families (the flip is the gesture). finish()
         // restores the incoming deck to full, so the sequence is hole →
         // impact, never hole → hole.
         if (!vacuumFired && !handedOff && render.mixset && smartFadeActive &&
             (render.style == TransitionStyle.DJ_BLEND || render.style == TransitionStyle.DJ_FILTER) &&
-            render.overlapSeconds >= 8.0 && !render.brake && !render.backspin &&
+            render.overlapSeconds >= 8.0 &&
             outProgress >= 0.97f
         ) {
             vacuumFired = true
@@ -3346,81 +3297,6 @@ class CrossfadeController(
             }
         }
 
-        // DJ brake (F2): dive the outgoing deck toward a stop over the last
-        // quarter of the blend. Varispeed feel: pitch slaved to rate, so the
-        // music falls in pitch as it slows — a turntable power-off, not a
-        // pitch-held slowdown. Quadratic dive, floored at 0.1 (Sonic rejects
-        // non-positive speeds; the handoff/retire takes the deck from there).
-        // Coalesced at 0.5%: ~15 commits over the dive, not 33. Entry may
-        // step down up to 6% when the pair needed a stretch — the stretch is
-        // exactly what the brake replaces, and the step lands deep in the
-        // blend under a falling dry path. Incoming deck untouched.
-        // Booth backspin: same DSP, over the plan's energy-scaled window
-        // with a cubic curve — a hand-dragged spin-back into the cut, not a
-        // power-off. The ½-beat dub tail (echoThrow) covers the hole while
-        // the deck dies; the handoff lands the drop at full energy.
-        if (render.mixset && render.brake && effSpan > 1L) {
-            val spinWindowMs = (render.spinSeconds * 1000.0).toFloat().coerceAtLeast(500f)
-            val windowStart = if (render.backspin) {
-                max(0f, 1f - spinWindowMs / effSpan.toFloat())
-            } else {
-                0.75f
-            }
-            // DJ-only: drive the PCM brake processor for a real spinback
-            // sweep (ExoPlayer rate dive alone is forward-only and too
-            // subtle). The phase is set, never re-armed: the processor walks
-            // its tap ring backwards continuously across the window, so every
-            // tick just advances the same sweep instead of restarting it.
-            // DJ-literature in/out: the hand spins beats, never a vocal —
-            // a reverse sweep over singing reads as a mistake, not a move.
-            // liveSingA is the trailing 2 s vocal density, refreshed every
-            // tick in rideEq above. A sung spin window falls back to the
-            // forward brake dive (brake is armed on every backspin plan).
-            // The threshold follows DJ intensity; the downgrade is logged
-            // once per blend so it never reads as a silent failure.
-            val singThreshold = AppSettings.djIntensity.value.singSpinThreshold
-            val spinning = render.backspin && liveSingA < singThreshold
-            if (render.backspin && !spinning && !spinDowngradeLogged) {
-                spinDowngradeLogged = true
-                TrackLog.d(
-                    TAG,
-                    "backspin downgraded to brake: sung tail liveSingA=$liveSingA " +
-                        "threshold=$singThreshold intensity=${AppSettings.djIntensity.value.name}",
-                )
-            }
-            brakeDiveFilters.setBackspin(spinning)
-            if (spinning && outProgress >= windowStart) {
-                val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
-                // Energy fix P1-2 still holds: real DJs keep the fader up
-                // through a spin-back, so no forward duck stacks onto the
-                // sweep — the spin's own envelope owns the level.
-                brakeDiveFilters.spinTo(t, render.spinGrabs)
-            } else if (render.brake && outProgress >= windowStart) {
-                val t = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f)).coerceIn(0f, 1f)
-                brakeDiveFilters.outgoing(t * 0.85f)
-            } else {
-                brakeDiveFilters.ride()
-            }
-            if (outProgress < windowStart) {
-                lastBrakeRate = AppSettings.playbackSpeed.value
-            } else {
-                val brakeT = ((outProgress - windowStart) / (1f - windowStart).coerceAtLeast(1e-6f))
-                    .coerceIn(0f, 1f)
-                val speed = AppSettings.playbackSpeed.value
-                val dive = if (spinning) brakeT * brakeT * 1.05f else brakeT * brakeT
-                val floor = if (spinning) 0.02f else 0.10f
-                val brakeRate = (speed * (1f - dive * 0.97f)).coerceAtLeast(floor * speed)
-                val brakePitch = (brakeRate / speed.coerceAtLeast(1e-6f)).coerceIn(0.02f, 1f)
-                val last = lastBrakeRate
-                if (abs(brakeRate - last) / last.coerceAtLeast(1e-6f) >= 0.005f) {
-                    out.setPlaybackParameters(PlaybackParameters(brakeRate, brakePitch))
-                    lastBrakeRate = brakeRate
-                }
-            }
-        } else {
-            brakeDiveFilters.ride()
-        }
-
         // Whichever comes first: the fade running its course, the old track
         // genuinely ending, the tail failing outright, or whichever setting
         // armed this fade being switched off mid-blend. Checked against the
@@ -3465,9 +3341,8 @@ class CrossfadeController(
         // 1-beat lead so the cut lands ON the drop. Corroborated against the
         // ARM snapshots (vocal hot, or energy stepping up >=30% into the
         // window) so a phantom target fails silent and the planned smooth
-        // blend runs its course. Braked/spun decks are exempt — the dive
-        // gesture owns that ending, not the cut.
-        if (!dropCutFired && render.mixset && !render.brake &&
+        // blend runs its course.
+        if (!dropCutFired && render.mixset &&
             (render.style == TransitionStyle.DJ_BLEND || render.style == TransitionStyle.DJ_FILTER) &&
             render.overlapSeconds >= 16.0
         ) {
@@ -3684,14 +3559,10 @@ class CrossfadeController(
         // everything while silent before next audible use, and re-parking at
         // full incoming volume only pumps the join.
         // DJ effects (F1/F3) bookkeeping, captured before Render() is parked
-        // below: whether this blend carried a throw/brake, and the throw's
+        // below: whether this blend carried a throw, and the throw's
         // delay + amount for closing the send at the handoff.
-        val hadEffect = render.mixset && (render.echoThrow || render.brake || render.backspin)
+        val hadEffect = render.mixset && render.echoThrow
         val wasDj = render.mixset
-        // Captured like the rest: render is parked below, so reading
-        // render.brake at the finish tick always sees false and the braked
-        // deck never gets homed there.
-        val wasBraked = render.mixset && render.brake
         val throwBlend = render.mixset && render.echoThrow
         val throwDelaySec = render.echoBeatSeconds
         val throwAmount = render.echoAmount
@@ -3809,15 +3680,6 @@ class CrossfadeController(
                     it.setPlaybackParameters(PlaybackParameters(AppSettings.playbackSpeed.value, 1f))
                 }
             }
-            // A braked deck fed its dub tail at dying pitch: home it before the
-            // tail rings, the way the throw's send is stepped shut above. Safe
-            // because the dry deck is already muted at the finish tick — this
-            // only re-times the echo feed. Reads the captured flag — render
-            // itself was parked further up.
-            if (wasBraked) {
-                outgoing?.setPlaybackParameters(PlaybackParameters(AppSettings.playbackSpeed.value, 1f))
-                lastBrakeRate = AppSettings.playbackSpeed.value
-            }
             // DJ echo throw (F1): step the send shut so the line stops taking
             // new feed and rings its residual ~2 s, then retire the deck late
             // (see tick()) so the tail survives the handoff — short tails
@@ -3877,7 +3739,6 @@ class CrossfadeController(
         // F3 rotation: only DJ blends advance the cooldown (manual fades and
         // normal Automix leave it alone).
         if (wasDj) blendsSinceEffect = if (hadEffect) 0 else blendsSinceEffect + 1
-        spinDowngradeLogged = false
         stripLoggedPair = null
         // Blueprint LOOP_CUT_DROP: the vamp never survives the handoff — the
         // deck is retired or re-armed from here, and begin() re-parks anyway.
@@ -4239,16 +4100,7 @@ class CrossfadeController(
             // any bed length so the dub is heard before the vacuum, not under it.
             val beatSec = render.echoBeatSeconds.toFloat() *
                 if (progress > 0.8f) 0.5f else 1f
-            // DJ-literature landing: the dub tail must clear before the drop
-            // — decay the send into the cut on backspin plans so only the
-            // residual rings under B instead of a full wet tail. Blend throws
-            // keep the hold (their tail IS the transition).
-            val release = if (render.backspin) {
-                1f - ((progress - 0.85f) / 0.15f).coerceIn(0f, 1f)
-            } else {
-                1f
-            }
-            echoFilters.outgoing((render.echoAmount * attack * release).toFloat(), beatSec)
+            echoFilters.outgoing((render.echoAmount * attack).toFloat(), beatSec)
         }
         if (!render.echoThrow && render.reverbAmount > 0.0) {
             val bloom = (progress * 2f).coerceIn(0f, 1f)
@@ -4270,8 +4122,7 @@ class CrossfadeController(
         val armed = render.mixset && smartFadeActive &&
             render.style == TransitionStyle.DJ_BLEND &&
             overlapSec >= 16f && beatSec > 0f &&
-            duckA.env < 0.25f && duckB.env < 0.25f &&
-            !render.brake && !render.backspin
+            duckA.env < 0.25f && duckB.env < 0.25f
         if (!armed) {
             if (lastLoopBeats != 0f && lastLoopBeats != -1f) {
                 loopVamps.open()
@@ -4501,17 +4352,7 @@ class CrossfadeController(
                         TransitionFilterProcessor.OFF_HZ,
                     )
                 }
-                // DJ-only: backspin voices ½-beat dub while spinning, not only post-cut.
-                // Quadratic rise to full echoAmount at the flip so the
-                // post-cut stepped close (from throwAmount at progress 1)
-                // continues the voice instead of stepping up from a quiet
-                // bed — that step was the snap at the landing.
-                if (render.mixset && render.backspin && render.echoThrow && render.echoAmount > 0.0 && render.echoBeatSeconds > 0.0) {
-                    val dub = (render.echoAmount * progress * progress).coerceIn(0.0, 0.5).toFloat()
-                    echoFilters.outgoing(dub, render.echoBeatSeconds.toFloat())
-                } else {
-                    echoFilters.open()
-                }
+                echoFilters.open()
                 reverbFilters.open()
             }
             // Loop-roll extend (Issue 1): same booth vamp as the cut — the

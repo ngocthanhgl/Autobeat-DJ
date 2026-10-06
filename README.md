@@ -34,7 +34,7 @@ Basic DJ Mode analyzes the **current track and the upcoming track** to determine
 
 Supported techniques include:
 
-- Backspin
+- Echo Throws
 - Beat Loop
 - Dynamic EQ
 - Vocal Ducking
@@ -120,7 +120,7 @@ It combines:
 |---|---|
 | **Fast Analysis** | Analyze tracks in seconds |
 | **AI-Powered Decisions** | Choose compatible transition points |
-| **DJ Effects** | Backspin, loops, echoes, EQ, vocal ducking and more |
+| **DJ Effects** | Echo throws, loops, echoes, EQ, vocal ducking and more |
 | **Harmonic Queue** | Arrange 20 upcoming tracks for smoother mixing |
 | **Mobile-first Performance** | Complete intensive analysis quickly |
 

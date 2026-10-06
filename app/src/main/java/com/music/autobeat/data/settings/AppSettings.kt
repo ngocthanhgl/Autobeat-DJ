@@ -141,8 +141,8 @@ enum class EqualizerMode {
 
 /**
  * How hard DJ Mode performs. LOW preserves the pre-1.0.1 behavior exactly
- * (polite cooldown, modest wets); MEDIUM loosens the fire gates; HIGH drops
- * the key-clash veto on backspins and removes the effect cooldown.
+ * (polite cooldown, modest wets); MEDIUM loosens the fire gates; HIGH
+ * removes the effect cooldown.
  */
 enum class DjIntensity(
     /** Blends to wait after an effected one before another may fire. */
@@ -159,14 +159,14 @@ enum class DjIntensity(
     val crushFloor: Double,
     /** LATE_NIGHT vibe wet multiplier floor. */
     val lateNightWet: Double,
-    /** Trailing vocal density that downgrades a spin to a brake. */
-    val singSpinThreshold: Float,
-    /** Whether a backspin still requires a proven key clash. */
-    val backspinRequiresKeyClash: Boolean,
+    /** Echo-throw wet multiplier, applied at runtime against the send cap. */
+    val echoWetFactor: Double,
+    /** Reverb-wash wet multiplier, applied at runtime against the send cap. */
+    val revWetFactor: Double,
 ) {
-    LOW(2, 0.08, 0.45, 0.25, 0.6f, 0.6, 0.6, 0.6f, true),
-    MEDIUM(1, 0.12, 0.55, 0.30, 0.7f, 0.75, 0.7, 0.7f, true),
-    HIGH(0, 0.18, 0.65, 0.38, 0.85f, 0.85, 0.85, 0.75f, false),
+    LOW(2, 0.08, 0.45, 0.25, 0.6f, 0.6, 0.6, 0.70, 0.60),
+    MEDIUM(1, 0.12, 0.55, 0.30, 0.7f, 0.75, 0.7, 0.85, 0.75),
+    HIGH(0, 0.18, 0.65, 0.38, 0.85f, 0.85, 0.85, 1.00, 0.90),
 }
 
 /** CPU budget for Automix's background analysis, not its audible mix algorithm. */

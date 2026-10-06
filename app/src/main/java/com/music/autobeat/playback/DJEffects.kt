@@ -2,7 +2,7 @@ package com.music.autobeat.playback
 
 /**
  * Orchestrates all DJ-gated audio processors. Groups the per-deck
- * sends, EQ, loop vamp, splice guard, loudness stage, and brake/dive
+ * sends, EQ, loop vamp, splice guard, and loudness stage
  * behind a single handle so [CrossfadeController] receives
  * one composition rather than ten loose parameters.
  *
@@ -40,14 +40,6 @@ class DJEffects {
     var activeLoudness: LoudnessGainProcessor = loudnessGainA
     var spareLoudness: LoudnessGainProcessor = loudnessGainB
 
-    val brakeDiveA = BrakeDiveProcessor()
-    val brakeDiveB = BrakeDiveProcessor()
-    var activeBrakeDive: BrakeDiveProcessor = brakeDiveA
-    var spareBrakeDive: BrakeDiveProcessor = brakeDiveB
-
-    /** Returns the active brake/dive processor for the outgoing deck. */
-    fun activeBrakeDive(): BrakeDiveProcessor = activeBrakeDive
-
     /** Open all processors — tails ring out naturally. */
     fun open() {
         activeEcho.open()
@@ -55,12 +47,11 @@ class DJEffects {
         activeVamp.open()
         activeEq.open()
         activeLoudness.open()
-        activeBrakeDive.ride()
     }
 
     // Full-audit F7: close/bail wipe tails immediately (they used to mirror
-    // open(), ringing ~2.5 s on a skip-interrupt). Ring buffers are cleared,
-    // gains parked, brake ridden to zero.
+    // open(), ringing ~2.5 s on a skip-interrupt). Ring buffers are cleared
+    // and gains parked.
     /** Close all processors — wipe tails immediately. */
     fun close() {
         activeEcho.clear()
@@ -68,7 +59,6 @@ class DJEffects {
         activeVamp.clear()
         activeEq.open()
         activeLoudness.open()
-        activeBrakeDive.ride()
     }
 
     /** Emergency bail — cut all tails immediately. */
@@ -78,7 +68,6 @@ class DJEffects {
         activeVamp.clear()
         activeEq.open()
         activeLoudness.open()
-        activeBrakeDive.ride()
     }
 
     /** Reset all processors to idle state. */
@@ -93,8 +82,6 @@ class DJEffects {
         spliceGuardB.reset()
         loudnessGainA.reset()
         loudnessGainB.reset()
-        brakeDiveA.reset()
-        brakeDiveB.reset()
     }
 
     /** Swap active/spare roles (handoff). */
@@ -118,9 +105,5 @@ class DJEffects {
         val tmpLoudness = activeLoudness
         activeLoudness = spareLoudness
         spareLoudness = tmpLoudness
-
-        val tmpBrake = activeBrakeDive
-        activeBrakeDive = spareBrakeDive
-        spareBrakeDive = tmpBrake
     }
 }

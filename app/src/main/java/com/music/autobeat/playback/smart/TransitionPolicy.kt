@@ -916,22 +916,6 @@ fun isHighEnergyAt(analysis: TrackAnalysis, time: Double): Boolean {
 }
 
 /**
- * Booth backspin gate: peak energy, not merely high energy. Both decks must
- * be at their summit (≥1.4× mean AND ≥80% of the track max) for a backspin
- * to fire — a spin out of (or into) a merely above-average passage reads as
- * a gimmick and breaks the emotional arc. Null/empty curves are no evidence
- * and answer false, never true.
- */
-fun isPeakEnergyAt(analysis: TrackAnalysis, time: Double): Boolean {
-    val energy = energyAt(analysis, time) ?: return false
-    val mean = meanEnergy(analysis) ?: return false
-    if (mean <= 0) return false
-    val max = maxEnergy(analysis) ?: return false
-    if (max <= 0) return false
-    return energy >= mean * 1.4 && energy >= max * 0.8
-}
-
-/**
  * Decides how ambitious a transition the stored analysis supports.
  *
  * Reasons are ordered most-disqualifying first so callers can surface

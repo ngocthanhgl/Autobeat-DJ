@@ -2,7 +2,6 @@ package com.music.autobeat.playback.smart
 
 import com.music.autobeat.data.settings.AppSettings
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -13,7 +12,7 @@ import kotlin.random.Random
  * the same mix every time (same overlap, same armed effects, same glide).
  * That reads as a good crossfade, not a DJ. Real booth work varies the trivia
  * (overlap by a beat, a slightly pushed rate, a cue a breath off the grid) and
- * occasionally pulls a punctuation move (a throw, a brake, a backspin) nobody
+ * occasionally pulls a punctuation move (an echo throw) nobody
  * scheduled. This file does both, inside rails the planner already accepts:
  * the anchor timing ([TransitionPlan.transitionStart], `shouldStart`) and the
  * harmonic math (key shift) are never touched — only the ride differs.
@@ -58,13 +57,8 @@ data class HumanDraws(
     val sweepScale: Double,
     /** Bass-swap fraction nudge, ±0.08. */
     val swapDelta: Double,
-    /** Wildcard move: \"throw\", \"brake\", \"backspin\", or null. */
+    /** Wildcard move: "throw", or null. */
     val wildcard: String?,
-    /**
-     * Backspin hand: 1 = one decisive pull, 2-3 = the hand re-grabbing
-     * mid-spin. Only voiced on backspin plans; ignored everywhere else.
-     */
-    val spinGrabs: Int,
 )
 
 /** Wildcard fire rate per eligible blend. */
@@ -89,36 +83,13 @@ fun humanizePlan(
     // armed into the vamp schedule, so timing draws would desync the renderer.
     val isLoop = plan.transitionStyle == TransitionStyle.LOOP_CUT_DROP ||
         plan.transitionStyle == TransitionStyle.LOOP_ROLL
-    if (!isBlend && !isLoop && !plan.backspin) {
+    if (!isBlend && !isLoop) {
         return plan to null
     }
     val outBeatSec = out?.beatInterval?.takeIf { it > 0.0 }
         ?: out?.bpm?.takeIf { it > 0.0 }?.let { 60.0 / it }
     // No grid, no beat draws — but the level draws can still apply.
     val draws = drawsFor(plan, out, next, outBeatSec, st, pairKey) ?: return plan to null
-
-    // Backspin plans: the hand only. Timing, rate and cue are the spin's own
-    // geometry (window, drop landing); the one human axis is single pull vs
-    // re-grabbed stutter.
-    if (plan.backspin) {
-        if (draws.spinGrabs <= 1) return plan to null
-        // Literature juggle: the re-grabbed stutter is a battle move, not
-        // seasoning — gate it like one. No vocal under the hand in the spin
-        // window (a scratch over singing is heckling), and the flicks land
-        // on beats: grabs quantized to every 2nd outgoing beat across the
-        // spin window, CDJ loop-roll style. A juggle is a big moment, so it
-        // buys a longer silence after itself than a plain wildcard.
-        val spinStart = plan.transitionEnd - plan.spinSeconds
-        val sung = out?.let { vocalActivityBetween(it, spinStart, plan.transitionEnd) } ?: 0.0
-        if (sung >= 0.3) return plan to null
-        val grabs = if (outBeatSec != null && outBeatSec > 0 && plan.spinSeconds > 0) {
-            (plan.spinSeconds / (2 * outBeatSec)).roundToInt().coerceIn(2, 3)
-        } else {
-            draws.spinGrabs
-        }
-        st.wildcardCooldown = maxOf(st.wildcardCooldown, 4)
-        return plan.copy(spinGrabs = grabs) to "seed=${st.mixes} grabs=$grabs juggle"
-    }
 
     var humanized = plan
     val notes = mutableListOf<String>()
@@ -147,7 +118,7 @@ fun humanizePlan(
     }
 
     // R2: the wildcard. Within-type arms only — same voice, one unplanned
-    // punctuation. Blends only: never stack onto a loop or a spin.
+    // punctuation. Blends only: never stack onto a loop.
     // The renderer's effect bookkeeping (blendsSinceEffect)
     // reads the armed fields off the render, so cooldowns follow for free.
     if (isBlend) when (draws.wildcard) {
@@ -157,14 +128,6 @@ fun humanizePlan(
                 echoAmount = maxOf(humanized.echoAmount, 0.6),
             )
             notes += "wild=throw"
-        }
-        "brake" -> {
-            humanized = humanized.copy(brake = true)
-            notes += "wild=brake"
-        }
-        "backspin" -> {
-            humanized = humanized.copy(backspin = true, brake = true, echoThrow = true)
-            notes += "wild=backspin"
         }
     }
     if (notes.isEmpty()) return plan to null
@@ -217,9 +180,6 @@ private fun rollDraws(
         sweepScale = 0.8 + rng.nextDouble() * 0.45,
         swapDelta = 0.0,
         wildcard = rollWildcard(plan, out, next, outBeatSec, st, rng),
-        // The hand: one decisive pull most plays, a re-grabbed stutter on
-        // some — pair-stable like every other draw.
-        spinGrabs = if (rng.nextDouble() < 0.30) rng.nextInt(2, 4) else 1,
     )
 }
 
@@ -237,20 +197,18 @@ private fun rollWildcard(
     st: HumanizeState,
     rng: Random,
 ): String? {
-    if (plan.brake || plan.echoThrow || plan.backspin) return null
+    if (plan.echoThrow) return null
+    // Deterministic choice: the wildcard only ever upgrades an echo the
+    // planner already voiced (more of the same voice) — it never introduces
+    // a new effect family onto a deliberately dry blend. What you hear is
+    // what the evidence planned.
+    if (plan.echoAmount <= 0.0) return null
     if (st.wildcardCooldown > 0) return null
     if (outBeatSec == null || out == null || next == null) return null
     // Wildcard punctuation chance follows DJ intensity (LOW keeps 0.08).
     if (rng.nextDouble() >= AppSettings.djIntensity.value.wildcardChance) return null
     val fade = plan.fadeSeconds
     val candidates = mutableListOf("throw")
-    if (fade >= 8.0) candidates += "brake"
-    // P1: a wildcard spin lands on the blend's own cue with the default 1 s
-    // hand, so it must earn the musical core (peak exit, clean window) even
-    // though no trusted drop is required — an unevidenced spin is a glitch.
-    if (fade >= 6.0 && spinPunctuationOk(out, plan.transitionEnd, plan.spinSeconds.coerceAtLeast(1.0))) {
-        candidates += "backspin"
-    }
     val clash = isVocalClash(
         vocalActivityBetween(out, plan.transitionStart, plan.transitionEnd),
         vocalActivityBetween(next, plan.incomingCueTime, plan.incomingCueTime + fade),
