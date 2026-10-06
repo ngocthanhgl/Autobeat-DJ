@@ -304,6 +304,9 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
      */
     private val displayTitles = ConcurrentHashMap<String, String>()
 
+    /** Artists keyed by track id, same log-only contract as [displayTitles]. */
+    private val displayArtists = ConcurrentHashMap<String, String>()
+
     /** Tracks already reported stuck, so the watchdog logs once not every tick. */
     private val stuckLogged = ConcurrentHashMap.newKeySet<String>()
 
@@ -566,9 +569,10 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
      * to wait for and nothing to escalate through. See [LocalAudioSource] for
      * why that needed saying at all.
      */
-    fun request(trackId: String, uri: Uri, durationSeconds: Double, title: String? = null) {
+    fun request(trackId: String, uri: Uri, durationSeconds: Double, title: String? = null, artist: String? = null) {
         if (trackId.isBlank()) return
         if (title?.isNotBlank() == true) displayTitles[trackId] = title
+        if (artist?.isNotBlank() == true) displayArtists[trackId] = artist
         if (trackId in running) return
         // Long-track skip is DJ-only: an 8+ minute track is recorded
         // ready-but-empty so the DJ planner renders it plainly. Stock upstream
@@ -925,10 +929,11 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
      * A vocal mask therefore cannot come from this pass either, and waits for
      * the whole-track one.
      */
-    /** "title [id]" for log lines when the title is known, else the bare id. */
+    /** "artist - title [id]" for log lines when known, else title, else the bare id. */
     private fun displayName(trackId: String): String {
         val title = displayTitles[trackId]?.takeIf { it.isNotBlank() } ?: return trackId
-        return "$title [$trackId]"
+        val artist = displayArtists[trackId]?.takeIf { it.isNotBlank() }
+        return "${if (artist != null) "$artist - " else ""}$title [$trackId]"
     }
 
     private fun analyzeHead(

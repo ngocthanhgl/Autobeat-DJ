@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.log2
 
@@ -441,6 +442,7 @@ object HarmonicSort {
             uri,
             durationSeconds(host, liveIndex),
             liveItem.mediaMetadata.title?.toString(),
+            liveItem.mediaMetadata.artist?.toString(),
         )
         try {
             withTimeout(TRACK_TIMEOUT_MS) {
@@ -628,6 +630,14 @@ object HarmonicSort {
             val abs = absolute[id]
             if (abs == null) rel else (0.7 * rel + 0.3 * abs).coerceIn(0.0, 1.0)
         }
+        // Flat-scope detector: when every energy reads the same, the arc
+        // penalty shifts all candidates in a slot equally and the argmax —
+        // and therefore the order — cannot move under any vibe. Say so out
+        // loud instead of re-sorting silently into the identical sequence.
+        val energySpread = (energies.values.maxOrNull() ?: 0.5) - (energies.values.minOrNull() ?: 0.5)
+        if (energySpread < 0.05) {
+            TrackLog.d("Autobeat", "harmonic vibe-no-op: energies flat (spread ${"%.3f".format(Locale.ROOT, energySpread)}), $vibe keeps pair order", null)
+        }
         // Tempo trajectory: the set drifts from the anchor toward the scope
         // median, so a smooth climb wins and a sawtooth pays per octave.
         val anchorBpm = anchor?.bpm?.takeIf { it > 0 } ?: 0.0
@@ -661,6 +671,13 @@ object HarmonicSort {
             if (sortableAt < 0) slot else placed[sortableAt]
         }
         TrackLog.d("Autobeat", "harmonic sort placed ${sorted.size} of ${upcoming.size} upcoming", null)
+        // The order itself, not just the count: a vibe change that keeps the
+        // sequence is invisible in the counts, and the counts alone cannot
+        // prove the sort moved anything. Titles, top of the scope first.
+        val orderTitles = sorted.take(MAX_SORT_AHEAD).mapIndexed { index, item ->
+            "${index + 1}.${item.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: item.mediaId}"
+        }
+        TrackLog.d("Autobeat", "harmonic order [$vibe]: ${orderTitles.joinToString(" > ")}", null)
         QueueShuffle.applyFromSession(player, from, order)
     }
 

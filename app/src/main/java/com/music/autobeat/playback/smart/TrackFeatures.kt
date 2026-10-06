@@ -109,6 +109,10 @@ object TrackFeatures {
             TrackLog.d(TAG, "key contest: native $key ($keyConfidence) vs temperley $root/$mode kept native (margin $margin)")
             return key
         }
+        // Retune feed: the overrule margin is the number the next round sets
+        // KEY_OVERRULE_MARGIN from — a log of keeps alone cannot show where
+        // the decisive contests actually land.
+        TrackLog.d(TAG, "key contest: native $key ($keyConfidence) overruled by temperley $root/$mode (margin $margin)")
         return TEMPERLEY_ROOT_NAMES[root] + if (mode == 0) " major" else " minor"
     }
 
@@ -258,6 +262,14 @@ object TrackFeatures {
             TrackLog.d(TAG, "half-time guard: $bpm kept (onsets $perClaimed/beat, $perDoubled/double-beat)")
             return features
         }
+        // Mid band (100-165): neither arm votes here, so a wrong winner sails
+        // through unexamined (Brother Louie '98 read 118.28 against a true
+        // 109). Log the densities anyway — the next session log shows whether
+        // the miss was sparse, dense, or off-grid instead of silent.
+        val perClaimed = onsetsPerBeat(onsets, duration, interval)
+        val perHalved = onsetsPerBeat(onsets, duration, interval * 2)
+        val perDoubled = onsetsPerBeat(onsets, duration, interval / 2)
+        TrackLog.d(TAG, "tempo vote: $bpm kept mid-band (onsets $perClaimed/beat, $perHalved/half-beat, $perDoubled/double-beat)")
         return features
     }
 

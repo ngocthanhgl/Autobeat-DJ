@@ -1029,13 +1029,14 @@ class CrossfadeController(
     private var lastPlanVerdict = ""
 
     /**
-     * "title [id]" for the plan/transition log lines when the item carries a
-     * title, else the bare id — ids alone cannot be Googled for ground truth.
+     * "artist - title [id]" for the plan/transition log lines when the item
+     * carries metadata, else the bare id — ids alone cannot be Googled.
      */
     private fun titleOf(item: MediaItem): String {
         val title = item.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() }
             ?: return item.mediaId
-        return "$title [${item.mediaId}]"
+        val artist = item.mediaMetadata.artist?.toString()?.takeIf { it.isNotBlank() }
+        return "${if (artist != null) "$artist - " else ""}$title [${item.mediaId}]"
     }
 
     /**

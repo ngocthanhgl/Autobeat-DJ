@@ -329,6 +329,14 @@ void AnalyzeKeyAndTimbre(
 ) {
   constexpr size_t frame_size = 4096;
   const size_t hop_size = std::max<size_t>(frame_size, sample_rate * 0.65);
+  // Bins per semitone grow exponentially with frequency (~1-2 in the bass
+  // vs ~20+ at 1-2 kHz), so an unweighted sum lets upper-octave broadband
+  // energy (hats, harmonics, formants) bury the bass that names the key.
+  // Weighting each bin by the inverse of its semitone's bin count gives
+  // every semitone one equal vote per octave; low octaves keep ~1.
+  const double bin_hz = sample_rate / static_cast<double>(frame_size);
+  // 2^(1/24) - 2^(-1/24): fractional semitone width at any frequency.
+  constexpr double kSemitoneFraction = 0.0578;
   const size_t first_sample = std::min(samples.size(), static_cast<size_t>(start_time * sample_rate));
   const size_t final_sample = std::min(samples.size(), static_cast<size_t>(end_time * sample_rate));
   std::array<double, 12> chroma{};
@@ -380,7 +388,9 @@ void AnalyzeKeyAndTimbre(
       const int midi = static_cast<int>(std::round(69.0 + 12.0 * std::log2(frequency / 440.0)));
       const int pitch_class = (midi % 12 + 12) % 12;
       const double weight = std::log1p(power);
-      chroma[pitch_class] += weight * rms;
+      const double bins_per_semitone =
+          (frequency * kSemitoneFraction) / bin_hz;
+      chroma[pitch_class] += weight * rms / std::max(1.0, bins_per_semitone);
       frame_chroma += weight;
     }
     const double frame_flatness = flatness_bins && arithmetic_sum > 0

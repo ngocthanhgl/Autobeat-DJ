@@ -1581,6 +1581,7 @@ class PlaybackService : MediaLibraryService() {
                         uri,
                         durationMs / 1000.0,
                         item.mediaMetadata.title?.toString(),
+                        item.mediaMetadata.artist?.toString(),
                     )
                 }
             },
