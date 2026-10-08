@@ -1024,6 +1024,9 @@ class CrossfadeController(
      */
     private var lastMarkedPair: String? = null
     private var lastMarkedWindow: TransitionWindow? = null
+    // Mixzone diagnostic F3: last (pair, no-reason) already logged, so the
+    // "why is there no zone" trace fires once per verdict, not per tick.
+    private var lastMarkableNoKey: String? = null
     /** G1: fingerprint of the plan that produced the latched window. */
     private var lastMarkedFingerprint: String? = null
     /**
@@ -1053,7 +1056,14 @@ class CrossfadeController(
      * Anchor moves bigger than this update the latched marker; smaller ones
      * stay frozen so tick jitter does not slide the bar (see G1 below).
      */
-    private val markerUpdateDriftMs = 2000.0
+    /**
+     * Same-pair anchor moves over this many ms update the bar. The latch
+     * only re-fires when the plan actually changed (fingerprint gate below),
+     * so a tight threshold cannot churn on tick jitter — it just stops
+     * swallowing real refinements while analyses land. Was 2000 ms, which
+     * froze the zone through whole cue refinements (mixzone-drift fix F4).
+     */
+    private val markerUpdateDriftMs = 500.0
     /**
      * How far ahead of a valid anchor the anchor freezes for its pair.
      * Past this point only the entry cue may still move (see G3 below).
@@ -1193,6 +1203,10 @@ class CrossfadeController(
                 // pair that just ended (F4 reset).
                 consecutiveBailCount = 0
                 bailCooldownUntilMs = 0L
+                // A new track starts near zero while the tracker still holds
+                // the old track's end — without this the first tick reads as
+                // a seek jump and pointlessly clears the fresh latch.
+                lastTickPositionMs = -1L
             }
             when (reason) {
                 // Something replaced the queue out from under the fade — a new
@@ -1724,10 +1738,21 @@ class CrossfadeController(
         // routinely analysed from its opening long before it plays, that was
         // most of the time the marker was missing.
         val pairKey = "${currentItem.mediaId}→${nextItem.mediaId}"
+        // Mixzone-seek fix F1: detect the discontinuity BEFORE the frozen
+        // replay below. A manual seek keeps the pair but moves the playhead;
+        // replaying the pre-seek frozen span (or re-latching its window)
+        // draws the zone behind the new position. On a seek tick the latch
+        // (frozen included) is dropped and nothing re-latches — the next
+        // tick marks fresh from the post-seek plan.
+        val seekNowMs = player.currentPosition
+        val seekJumped = lastTickPositionMs >= 0 &&
+            abs(seekNowMs - lastTickPositionMs) > seekJumpThresholdMs
+        if (seekJumped) clearMarkerLatch()
         // G3 anchor freeze: DJ-only — stock Automix keeps the live plan like
         // origin, otherwise a 6000ms lead + frozen anchor made the marker sit
         // while the plain fade armed late.
         if (mixset) {
+            if (!seekJumped) {
             if (plan.blocked) {
                 if (frozenAnchorPair == pairKey) frozenAnchorPair = null
             } else if (plan.fadeMs > 0L) {
@@ -1765,6 +1790,7 @@ class CrossfadeController(
             } else if (frozenAnchorPair == pairKey) {
                 frozenAnchorPair = null
             }
+            } // !seekJumped: seek ticks run the fresh plan, frozen nothing
         } else if (frozenAnchorPair == pairKey) {
             // Stock: no freeze — drop any DJ latch left from a mode switch.
             frozenAnchorPair = null
@@ -1806,6 +1832,25 @@ class CrossfadeController(
         } else {
             null
         }
+        // Mixzone diagnostic F3: when no zone is promised, name the failing
+        // gate. A missing zone after a played-through mix stops being a
+        // mystery — the next log says blocked / markerInvisible /
+        // current-<state> / provisional / next-<state> outright.
+        if (window == null) {
+            val noReason = when {
+                plan.blocked -> "blocked"
+                !plan.markerVisible -> "markerInvisible"
+                duration <= 0L -> "no-duration"
+                analysisState.current != TrackAnalysisState.ANALYSED -> "current-${analysisState.current}"
+                currentAnalysis.provisionalHead -> "provisional"
+                else -> "next-${analysisState.next}"
+            }
+            val noKey = "$pairKey|$noReason"
+            if (noKey != lastMarkableNoKey) {
+                lastMarkableNoKey = noKey
+                TrackLog.d(TAG, "markable-no=$noReason pair=$pairKey")
+            }
+        }
         // Restore origin ee8a348 verbatim for stock Automix: the marker is
         // the live window, not a latched one. G1 versioned latch + seek-jump
         // handling are DJ-only (LEAK #4/5).
@@ -1839,15 +1884,10 @@ class CrossfadeController(
             // Otherwise a transient dip on the same pair — the latched window
             // outlives it, which is what makes the marker appear once both tracks
             // are measured and then stay put until the mix.
-            val nowMs = player.currentPosition
-            if (lastTickPositionMs >= 0 && abs(nowMs - lastTickPositionMs) > seekJumpThresholdMs) {
-                clearMarkerLatch()
-                if (window != null) {
-                    lastMarkedPair = pairKey
-                    lastMarkedWindow = window
-                }
-            }
-            lastTickPositionMs = nowMs
+            // F1: the discontinuity was already handled (latch + frozen
+            // cleared, nothing re-latched) before the frozen replay above —
+            // here the position tracker just keeps up.
+            lastTickPositionMs = player.currentPosition
             AppSettings.smartTransitionWindow.value =
                 lastMarkedWindow?.takeIf { pairKey == lastMarkedPair } ?: window
         } else {
@@ -2318,6 +2358,10 @@ class CrossfadeController(
      */
     fun onQueueReordered() {
         val player = runCatching { active() }.getOrNull() ?: return
+        // Mixzone-reorder fix F2: the published window AND the latch describe
+        // the old pair until a replan succeeds — drop both now so a stale
+        // latch never competes with the new pair's first markable tick.
+        clearMarkerLatch()
         AppSettings.smartTransitionWindow.value = null
         AppSettings.sharedHalfTimeBpm.value = null
         // P0: a reorder/replace at the next slot while armed invalidates the
