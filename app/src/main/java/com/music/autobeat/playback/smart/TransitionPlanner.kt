@@ -706,6 +706,9 @@ internal fun plainDissolvePlan(
     // returning the same passed cut.
     val scanFrom = max(baseScanFrom, scanFromOverride ?: Double.NEGATIVE_INFINITY)
     var (cutSec, dissolveSec) = findPlainCutPoint(analysis, scanFrom, contentEnd)
+    // P4: the stock PLAIN_DISSOLVE wash is never thinner than 6 s; a 4 s
+    // shrug mid-track with duck active was the user's harsh pumping.
+    dissolveSec = dissolveSec.coerceAtLeast(6.0)
     // DJ-only forward rescue: a fallback zone already behind the playhead is
     // a dead anchor — it arms as a 2 s stub at the track edge, the joke cut
     // from the session log. Re-scan ahead of the playhead for a real zone
@@ -719,7 +722,7 @@ internal fun plainDissolvePlan(
             return blocked("dissolve-no-room", max(0.0, cutSec - dissolveSec), cutSec)
         }
         cutSec = fwdCut
-        dissolveSec = fwdDissolve
+        dissolveSec = fwdDissolve.coerceAtLeast(6.0)
     }
     val transitionStart = max(0.0, cutSec - dissolveSec)
     // Spec: the incoming track's entry is its audible start — in Mixset Mode
@@ -810,7 +813,7 @@ private fun heavyClashPlan(
         markerVisible = true,
         transitionStart = transitionStart,
         transitionEnd = mixAnchor,
-        fadeSeconds = mixAnchor - transitionStart,
+        fadeSeconds = (mixAnchor - transitionStart).coerceAtLeast(8.0),
         transitionStyle = TransitionStyle.ECHO_REVERB_OUT,
         incomingCueTime = entry,
         incomingHandoffTime = entry,
@@ -1026,7 +1029,7 @@ private fun echoOutPlan(
         markerVisible = true,
         transitionStart = transitionStart,
         transitionEnd = mixAnchor,
-        fadeSeconds = (mixAnchor - transitionStart).coerceAtLeast(0.1),
+        fadeSeconds = (mixAnchor - transitionStart).coerceAtLeast(8.0),
         transitionStyle = TransitionStyle.ECHO_REVERB_OUT,
         type = TransitionType.ECHO_REVERB_OUT,
         score = score,
@@ -1097,7 +1100,7 @@ private fun filterSweepPlan(
             markerVisible = true,
             transitionStart = transitionStart,
             transitionEnd = mixAnchor,       // C3 FIX: was mixEnd (undefined in scope)
-            fadeSeconds = fadeSeconds.coerceAtLeast(0.1),
+            fadeSeconds = fadeSeconds.coerceAtLeast(8.0),
             handoffStartSeconds = 0.0,
             handoffDuration = fadeSeconds,
             incomingCueTime = proxyEntry,

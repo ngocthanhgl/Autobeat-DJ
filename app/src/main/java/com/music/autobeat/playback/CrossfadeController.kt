@@ -840,7 +840,7 @@ class CrossfadeController(
         // the plan read instrumental — a -5 dB slam mid-wash is the harsh
         // pumping listeners hear. Escalation is a long-bed privilege: short
         // fades keep the proportional envelope duck only.
-        val longEnoughToDuel = render.overlapSeconds >= EqSchedule.LONG_BED_SECONDS
+        val longEnoughToDuel = render.overlapSeconds >= 16.0
         val hot = longEnoughToDuel && maxOf(envA, envB) > 0.5f
         if (hot) {
             if (duelHotSinceMs <= 0L) duelHotSinceMs = now
@@ -2656,6 +2656,14 @@ class CrossfadeController(
         incomingCueTimeMs = cueTimeMs.coerceAtLeast(0L)
         incomingPlaybackRate = playbackRate
         render = renderStyle
+        if (renderStyle.mixset &&
+            (renderStyle.style == TransitionStyle.DJ_BLEND || renderStyle.style == TransitionStyle.DJ_FILTER) &&
+            renderStyle.overlapSeconds in 0.01..8.0
+        ) {
+            render = renderStyle.copy(overlapSeconds = 8.0)
+            fadeMs = 8000L
+            fadeEndMs = cueTimeMs.coerceAtLeast(0L) + 8000L
+        }
         armDeadline = SystemClock.elapsedRealtime() + ARM_TIMEOUT_MS
         handedOff = false
         cutFired = false
@@ -3329,8 +3337,16 @@ class CrossfadeController(
         if (render.mixset && smartFadeActive) {
             val aYieldVol = duckA.env * inProgress.coerceIn(0f, 1f)
             val bYieldVol = duckB.env * inProgress.coerceIn(0f, 1f)
-            if (aYieldVol > 0.005f) out.volume = out.volume * (1f - duckVolDepth * aYieldVol)
-            if (bYieldVol > 0.005f) player.volume = player.volume * (1f - duckVolDepth * bYieldVol)
+            val fadeDepthScale = (render.overlapSeconds / 12.0).coerceIn(0.35, 1.0).toFloat()
+            if (aYieldVol > 0.005f) out.volume = out.volume * (1f - duckVolDepth * fadeDepthScale * aYieldVol)
+            if (bYieldVol > 0.005f) player.volume = player.volume * (1f - duckVolDepth * fadeDepthScale * bYieldVol)
+            // F3: both decks audible at once needs a small shared pad so the
+            // ear hears one steady bed instead of a peak.
+            val bothAudible = player.volume > 0.2f && out.volume > 0.2f
+            if (bothAudible) {
+                out.volume *= 0.89f
+                player.volume *= 0.89f
+            }
         }
         // Half-time downbeat emphasis (§11.2): a 2-frame low-pass pulse as the
         // stretched grid crosses each planned phrase start. Tracked so a pulse
@@ -4002,6 +4018,7 @@ class CrossfadeController(
         // knew the planned zone, while a vocal can enter mid-blend as the
         // window slides. Slewed (~500 ms) so a single hot frame cannot
         // flap the mids.
+        val fadeDepthScale = (render.overlapSeconds / 12.0).coerceIn(0.35, 1.0).toFloat()
         updateLiveVocalFlags(outProgress, inProgress)
         // Single analyzer-driven vocal gate (mirrors MixConductor recipe rule):
         // ARM flags + force choke + the live sidechain envelopes, once per
@@ -4015,7 +4032,7 @@ class CrossfadeController(
         // non-delay table while A clears the band: A yields, B fills, staggered.
         // B's volume there is still only ~0.45, so the early rise reads as a
         // clean handoff, not mud.
-        val delay = render.delayBMids || duckB.env > 0.02f
+        val delay = render.overlapSeconds >= 8.0 && (render.delayBMids || duckB.env > 0.02f)
         // P2: single trace threshold 0.12, aligned with the choke — one
         // number decides "vocally dirty" everywhere below the recipe.
         val vocalGate = duck || delay || render.vocalOverlap > 0.12
@@ -4214,7 +4231,7 @@ class CrossfadeController(
             // a solo A vocal never carves itself, and the carve breathes
             // with the crossfade instead of latching.
             val aYieldMid = duckA.env * inProgress.coerceIn(0f, 1f)
-            val outMidCarved = outMid * (1f - duckMidDepth * aYieldMid)
+            val outMidCarved = outMid * (1f - duckMidDepth * fadeDepthScale * aYieldMid)
             val outHigh = (out.high * ownership * propHigh) *
                 (if (longBed && vocalGate) 1f - sumHigh * highIn.coerceIn(0f, 1f) else 1f)
             // B's defer lives here because only this path knows ownership.
@@ -4225,7 +4242,7 @@ class CrossfadeController(
             // P1 mirror: the incoming band yields to B's OWN live vocal,
             // scaled by B's own audibility (D3: inProgress, not A's
             // remainder) — a late B ad-lib keeps its full carve.
-            (1f - duckMidDepth * duckB.env * inProgress.coerceIn(0f, 1f))
+            (1f - duckMidDepth * fadeDepthScale * duckB.env * inProgress.coerceIn(0f, 1f))
         lastInLow = lowIn
         lastInMid = inMidFinal
         lastInHigh = highIn
