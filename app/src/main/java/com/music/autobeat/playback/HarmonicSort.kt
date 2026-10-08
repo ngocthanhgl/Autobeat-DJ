@@ -183,6 +183,15 @@ object HarmonicSort {
     /** Ignored head/tail share of the curve: intro fades and outro tails lie. */
     private const val DROP_EDGE_TRIM = 0.10
     /**
+     * Vibe-spread fix V2: on a mastered library the blended energies cluster
+     * (session-log-14: every vibe returns the same order), so the arc penalty
+     * can never outvote the pair terms. Expand the final energies around 0.5
+     * by this gain (clamped) so small real differences separate the vibe
+     * targets; a truly flat scope still reads 0.5 everywhere and degrades
+     * to pair-only greedy honestly.
+     */
+    private const val VIBE_SPREAD_GAIN = 2.0
+    /**
      * Sort guard E2: tempo veto band vs the chain cursor. A candidate whose
      * tempo sits outside 0.80–1.25x the cursor is never chained next — the
      * pair scorer's drift term softens slopes, the veto forbids cliffs.
@@ -698,7 +707,8 @@ object HarmonicSort {
             val rel = if (raw == null || !raw.isFinite() || eMax <= eMin) 0.5
                 else ((raw - eMin) / (eMax - eMin)).coerceIn(0.0, 1.0)
             val abs = absolute[id]
-            if (abs == null) rel else (0.7 * rel + 0.3 * abs).coerceIn(0.0, 1.0)
+            val base = if (abs == null) rel else (0.7 * rel + 0.3 * abs).coerceIn(0.0, 1.0)
+            (0.5 + (base - 0.5) * VIBE_SPREAD_GAIN).coerceIn(0.0, 1.0)
         }
         // Flat-scope detector: when every energy reads the same, the arc
         // penalty shifts all candidates in a slot equally and the argmax —

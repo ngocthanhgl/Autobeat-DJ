@@ -1075,7 +1075,34 @@ class CrossfadeController(
         lastMarkedWindow = null
         lastMarkedFingerprint = null
         frozenAnchorPair = null
+        lockedZonePair = null
         lastTickPositionMs = -1L
+    }
+
+    // Seek-lock H1: every manual seek on the same pair locks the zone — the
+    // latch, the frozen anchor and the plan keep replaying the locked span
+    // instead of re-marking (possibly backward) from the post-seek plan.
+    // Released when the playhead passes the locked end (into forward
+    // recovery), the pair changes, or the fade hands off / bails — all of
+    // which already clear the latch above.
+    private var lockedZonePair: String? = null
+    private var lockedZoneStartSec = 0.0
+    private var lockedZoneEndSec = 0.0
+
+    // Mixzone trace G3: every bar update logs its span (or null) with the
+    // reason, so the next session log shows exactly what the bar was told.
+    // Consecutive duplicates are suppressed — a steady zone logs once.
+    private var lastPublishedZoneKey: String? = null
+    private fun publishZone(window: TransitionWindow?, why: String) {
+        AppSettings.smartTransitionWindow.value = window
+        val key = "$why|${window?.start}|${window?.end}"
+        if (key != lastPublishedZoneKey) {
+            lastPublishedZoneKey = key
+            val span = window?.let {
+                "${"%.3f".format(Locale.ROOT, it.start)}..${"%.3f".format(Locale.ROOT, it.end)}"
+            } ?: "null"
+            TrackLog.d(TAG, "zone=$span why=$why")
+        }
     }
 
     /**
@@ -1433,7 +1460,7 @@ class CrossfadeController(
         // claiming both songs are measured.
         if (!player.hasNextMediaItem()) {
             logGuardOnce("auto", "no transition: queue ends here")
-            AppSettings.smartTransitionWindow.value = null
+            publishZone(null, "queue-end")
             if (mixsetGateForAuto) clearMarkerLatch()
             return
         }
@@ -1472,7 +1499,7 @@ class CrossfadeController(
             // Stale otherwise: the marker would keep describing the transition
             // planned for this pair before the loop went on, at a point the
             // playhead now runs past on every lap without anything happening.
-            AppSettings.smartTransitionWindow.value = null
+            publishZone(null, "repeat-loop")
             if (mixsetGateForAuto) clearMarkerLatch()
             return
         }
@@ -1549,7 +1576,7 @@ class CrossfadeController(
         // transition exactly as origin did.
         val mixsetEarly = AppSettings.mixsetModeEnabled.value
         if (mixsetEarly && (currentItem.isVideoOrigin || nextItem.isVideoOrigin)) {
-            AppSettings.smartTransitionWindow.value = null
+            publishZone(null, "video-origin")
             AppSettings.smartMixInProgress.value = false
             return
         }
@@ -1747,13 +1774,37 @@ class CrossfadeController(
         val seekNowMs = player.currentPosition
         val seekJumped = lastTickPositionMs >= 0 &&
             abs(seekNowMs - lastTickPositionMs) > seekJumpThresholdMs
-        if (seekJumped) clearMarkerLatch()
+        if (seekJumped) {
+            // H1: lock, don't clear. A same-pair seek keeps the zone it had
+            // (hard lock); a new pair — or no zone at all — keeps the
+            // fresh-mark behavior.
+            val latched = lastMarkedWindow
+            if (latched != null && lastMarkedPair == pairKey && duration > 0L) {
+                lockedZonePair = pairKey
+                lockedZoneStartSec = latched.start * duration / 1000.0
+                lockedZoneEndSec = latched.end * duration / 1000.0
+                TrackLog.d(TAG, "zone locked by seek pair=$pairKey")
+            } else {
+                clearMarkerLatch()
+            }
+        }
         // G3 anchor freeze: DJ-only — stock Automix keeps the live plan like
         // origin, otherwise a 6000ms lead + frozen anchor made the marker sit
         // while the plain fade armed late.
         if (mixset) {
             if (!seekJumped) {
-            if (plan.blocked) {
+            if (lockedZonePair == pairKey) {
+                // H1 lock replay: the plan serves the locked span — the mix
+                // fires where the bar promised, never where a post-seek
+                // re-plan moved it.
+                val lockedDur = (lockedZoneEndSec - lockedZoneStartSec).coerceAtLeast(0.1)
+                plan = plan.copy(
+                    transitionStart = lockedZoneStartSec,
+                    transitionEnd = lockedZoneEndSec,
+                    fadeSeconds = lockedDur,
+                    overlapSeconds = lockedDur,
+                )
+            } else if (plan.blocked) {
                 if (frozenAnchorPair == pairKey) frozenAnchorPair = null
             } else if (plan.fadeMs > 0L) {
                 val remainingMs = (plan.transitionStart * 1000).roundToLong() - player.currentPosition
@@ -1888,8 +1939,10 @@ class CrossfadeController(
             // cleared, nothing re-latched) before the frozen replay above —
             // here the position tracker just keeps up.
             lastTickPositionMs = player.currentPosition
-            AppSettings.smartTransitionWindow.value =
-                lastMarkedWindow?.takeIf { pairKey == lastMarkedPair } ?: window
+            publishZone(
+                lastMarkedWindow?.takeIf { pairKey == lastMarkedPair } ?: window,
+                "tick $pairKey",
+            )
         } else {
             // Stock Automix: origin ee8a348 had no latch — clear any DJ latch
             // left from a mode switch and publish the live window.
@@ -1900,7 +1953,51 @@ class CrossfadeController(
                 lastTickPositionMs = -1L
                 frozenAnchorPair = null
             }
-            AppSettings.smartTransitionWindow.value = window
+            publishZone(window, "stock-tick")
+        }
+
+        // H1 lock release + H2 forward recovery. A lock whose end the
+        // playhead passed releases here; a blocked plan — or a window
+        // already behind the playhead because analysis landed late — with
+        // room ahead gets a forward re-scan instead of dying: full planner
+        // from pos+2 (best transition first), plain dissolve fallback.
+        val recPosSec = player.currentPosition / 1000.0
+        val recLenSec = duration / 1000.0
+        if (lockedZonePair == pairKey && duration > 0L && recPosSec > lockedZoneEndSec) {
+            lockedZonePair = null
+            TrackLog.d(TAG, "zone lock released (passed end), recovering forward")
+        }
+        val windowBehind = plan.transitionEnd > 0 && plan.transitionEnd <= recPosSec + 0.5
+        if (mixset && (plan.blocked || windowBehind) && recLenSec - recPosSec > 6.0) {
+            val nextLenSec = nextDuration.takeIf { it > 0L }?.div(1000.0) ?: 0.0
+            val fwd = planTransition(
+                analysis = currentAnalysis,
+                nextAnalysis = nextAnalysis,
+                currentTrack = currentItem.toTransitionInfo(duration),
+                nextTrack = nextItem.toTransitionInfo(nextDuration),
+                currentTime = recPosSec + 2.0,
+                duration = recLenSec,
+                fadeSeconds = fallbackSeconds,
+                mode = CrossfadeMode.SMART,
+                mixset = true,
+            )
+            if (!fwd.blocked && fwd.transitionStart >= recPosSec + 2.0 - 0.01 &&
+                fwd.transitionEnd - fwd.transitionStart >= MIN_GUARANTEED_BLEND_SECONDS
+            ) {
+                plan = fwd.copy(reason = "late-analysis-rescan")
+                TrackLog.d(TAG, "late recovery: full re-scan ${"%.1f".format(Locale.ROOT, plan.transitionStart)}..${"%.1f".format(Locale.ROOT, plan.transitionEnd)}")
+            } else {
+                plan = plainDissolvePlan(
+                    currentAnalysis,
+                    nextAnalysis,
+                    recLenSec,
+                    nextLenSec,
+                    recPosSec,
+                    true,
+                    plan.policyReasons + "late-analysis-dissolve",
+                    scanFromOverride = recPosSec + 2.0,
+                )
+            }
         }
 
         if (plan.blocked) return
@@ -1956,12 +2053,12 @@ class CrossfadeController(
                     )
                     lastMarkedPair = pairKey
                     lastMarkedWindow = fwdWindow
-                    AppSettings.smartTransitionWindow.value = fwdWindow
+                    publishZone(fwdWindow, "rescue-forward")
                 }
             } else {
                 // No room for a real blend: clear the promised window and
                 // await the natural advance instead of displaying a passed mix.
-                AppSettings.smartTransitionWindow.value = null
+                publishZone(null, "rescue-no-room")
                 return
             }
         }
@@ -2358,11 +2455,12 @@ class CrossfadeController(
      */
     fun onQueueReordered() {
         val player = runCatching { active() }.getOrNull() ?: return
-        // Mixzone-reorder fix F2: the published window AND the latch describe
-        // the old pair until a replan succeeds — drop both now so a stale
-        // latch never competes with the new pair's first markable tick.
+        // Mixzone-reorder fix F2/G1: the latch describes the old pair until
+        // a replan succeeds — drop it now, but do NOT publish null: the next
+        // tick's live window (fresh plan, new pair) publishes by itself, and
+        // a null here just blinks the zone on every sort flap. The pill
+        // republish + analysis kick below cover the rest.
         clearMarkerLatch()
-        AppSettings.smartTransitionWindow.value = null
         AppSettings.sharedHalfTimeBpm.value = null
         // P0: a reorder/replace at the next slot while armed invalidates the
         // cue AND the marker latch, not just the published window. Detect it
@@ -2823,7 +2921,7 @@ class CrossfadeController(
             out.removeMediaItems(out.currentMediaItemIndex + 1, out.mediaItemCount)
         }
         AppSettings.smartMixInProgress.value = false
-        AppSettings.smartTransitionWindow.value = null
+        publishZone(null, "handoff-prune")
         clearMarkerLatch()
         phase = Phase.FADING
         finish()
@@ -2990,7 +3088,7 @@ class CrossfadeController(
         }
         // The queue has just moved on, so the marker's fractions now refer to a
         // track the session player is no longer showing a position for.
-        AppSettings.smartTransitionWindow.value = null
+        publishZone(null, "queue-moved-on")
         if (render.mixset) clearMarkerLatch()
         phase = Phase.FADING
     }
@@ -3529,6 +3627,11 @@ class CrossfadeController(
     private fun bail(fromSwap: Boolean = false) {
         if (phase == Phase.IDLE || phase == Phase.BAILING) return
         TrackLog.d(TAG, "bail from $phase")
+        // Mixzone fix G2: a bailed arm's zone is a dead promise — drop the
+        // latch and the bar with it, in both modes. The next markable tick
+        // re-marks from the fresh plan.
+        clearMarkerLatch()
+        publishZone(null, "bail")
         // Restore origin ee8a348 verbatim for stock Automix: bail cooldown
         // and half-time write are DJ-only (LEAK #11). Origin had no cooldown
         // and no half-time. A swap teardown is deliberate, not a storm, so it

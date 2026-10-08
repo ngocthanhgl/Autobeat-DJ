@@ -1844,9 +1844,12 @@ class PlaybackService : MediaLibraryService() {
                 args.getString(EXTRA_HARMONIC_VIBE) ?: return,
             )
         }.getOrNull() ?: return
+        val old = AppSettings.harmonicVibe.value
         AppSettings.setHarmonicVibe(vibe)
         val ep = player ?: return
-        TrackLog.d("Autobeat", "harmonic vibe: $vibe, re-sorting live scope", null)
+        // Vibe trace V1: every vibe tap names old->new, so the session log
+        // proves the tap arrived (session-log-14 cycled vibes with no trace).
+        TrackLog.d("Autobeat", "harmonic vibe: $old->$vibe, re-sorting live scope", null)
         HarmonicSort.resort(ep, HarmonicSort.Deps(scope, trackAnalyzer, AudioCache))
     }
 
