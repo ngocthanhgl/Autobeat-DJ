@@ -2831,13 +2831,7 @@ private fun planTransitionInner(
         if (!mixset) {
             // Stock upstream: tail fade at equal power, cued at first sound.
             val transitionStart = max(0.0, mixAnchor - standardFade)
-    val started = playbackTime >= transitionStart
-    // Style follows the key evidence, not just the grid: a FILTER_SWEEP
-    // matrix verdict (clash-evidenced) renders under DJ_FILTER (sweep +
-    // mid-kill) even when the grids hold — rendering it as DJ_BLEND voiced
-    // the FILTER EQ tables plus separation/proactive at once (double carve).
-    val forceFilterStyle = mixset && selectedType == TransitionType.FILTER_SWEEP
-    val renderBlend = sameBeatBlend && !forceFilterStyle
+            val started = playbackTime >= transitionStart
             return TransitionPlan(
                 shouldStart = started,
                 markerVisible = true,
@@ -3521,6 +3515,12 @@ private fun planTransitionInner(
         incomingPlaybackRate = incomingPlaybackRate,
         mixset = mixset,
     )
+    // Style follows the key evidence, not just the grid: a FILTER_SWEEP
+    // matrix verdict (clash-evidenced) renders under DJ_FILTER (sweep +
+    // mid-kill) even when the grids hold — rendering it as DJ_BLEND voiced
+    // the FILTER EQ tables plus separation/proactive at once (double carve).
+    val forceFilterStyle = mixset && selectedType == TransitionType.FILTER_SWEEP
+    val renderBlend = sameBeatBlend && !forceFilterStyle
     return applyMixsetFireFloor(
         TransitionPlan(
             shouldStart = started,
