@@ -232,11 +232,9 @@ fun contentSelectsCut(
     windowStart: Double,
     windowEnd: Double,
 ): Boolean {
-    val outClear = hasVocalEvidence(out) && !vocalCoversWindow(out, windowStart, windowEnd)
-    val inClear = hasVocalEvidence(incoming) && !vocalCoversWindow(incoming, windowStart, windowEnd)
-    // Only cut if evidence appears on BOTH sides and both are clear.
-    // If ANY side missing evidence or uncertain, prefer wash (return false).
-    return outClear && inClear
+    val outHot = vocalActivityBetween(out, windowStart, windowEnd)
+    val inHot = vocalActivityBetween(incoming, windowStart, windowEnd)
+    return isVocalClash(outHot, inHot)
 }
 
 /** Hard safety net no transition may exceed, however generous its budget. */
@@ -2079,7 +2077,7 @@ private fun plannedVocalOverlap(
             rate = rate,
         ) ?: 0.0
     } else {
-        1.0
+        0.0
     }
 }
 
@@ -3137,9 +3135,9 @@ private fun planTransitionInner(
             ?: if (nextAnalysis.bpm.orZero() > 0) 60 / nextAnalysis.bpm else 0.5
         val outWs = max(0.0, mixAnchor - 32 * ivA)
         val inWe = proxyEntry + 32 * ivB
-        if (contentSelectsCut(analysis, nextAnalysis, outWs, mixAnchor) ||
-            contentSelectsCut(analysis, nextAnalysis, proxyEntry, inWe)
-        ) {
+        val outHot = vocalActivityBetween(analysis, outWs, mixAnchor)
+        val inHot = vocalActivityBetween(nextAnalysis, proxyEntry, inWe)
+        if (isVocalClash(outHot, inHot)) {
             noteVeto(policy, "vocal-cut")
             selectedType = if (proxyScore.bpm < 0.70) TransitionType.ECHO_REVERB_OUT
             else TransitionType.HARD_CUT
