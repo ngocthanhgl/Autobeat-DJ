@@ -806,7 +806,11 @@ private fun heavyClashPlan(
         overlapSeconds = fadeSec,
         // Stock upstream: dry. DJ Mode keeps its graded wash.
         echoAmount = if (mixset) HEAVY_CLASH_ECHO_AMOUNT * clashGate else 0.0,
-        reverbAmount = if (mixset) HEAVY_CLASH_REVERB_WET * clashGate else 0.0,
+        reverbAmount = if (mixset) {
+            HEAVY_CLASH_REVERB_WET * clashGate * AppSettings.djIntensity.value.revWetFactor
+        } else {
+            0.0
+        },
         // Full-audit P1 M4: the dub throw repeats every HALF beat.
         echoPeriodBeats = 0.5,
         reverbFreezeAtSec = HEAVY_CLASH_FREEZE_OFFSET_SEC,
@@ -1942,12 +1946,14 @@ private fun bassSwapFractionFor(
  * Peak echo-send wet for a DJ vocal throw (F1): a send, not an instrument.
  * Follows DJ intensity — LOW keeps the legacy 0.45.
  */
-private fun throwWetFor(): Double = AppSettings.djIntensity.value.throwWet
+private fun throwWetFor(): Double =
+    AppSettings.djIntensity.value.throwWet * AppSettings.djIntensity.value.echoWetFactor
 /**
  * Reverb-wash bed peak (F3): follows DJ intensity — LOW keeps the legacy
  * [BLEND_REVERB_WET].
  */
-private fun washWetFor(): Double = AppSettings.djIntensity.value.washWet
+private fun washWetFor(): Double =
+    AppSettings.djIntensity.value.washWet * AppSettings.djIntensity.value.revWetFactor
 /**
  * Default bed-wash scale: blends that earn neither a throw nor a breakdown
  * wash still get space in the room, at half the voiced wet.

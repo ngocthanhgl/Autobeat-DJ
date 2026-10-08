@@ -1968,7 +1968,7 @@ class CrossfadeController(
             // Phrase end: A's duck zone ends where A goes quiet for a breath.
             val phraseEnd = firstQuietGapSec(a, zoneStart, zoneEnd) ?: zoneEnd
             vocalActivityBetween(a, zoneStart, phraseEnd)
-        }?.let { it > 0.50 } ?: false
+        }?.let { it > 0.35 } ?: false
         val delayBMids = nextAnalysis?.let { b ->
             val entryBeats = if (b.beatInterval > 0) b.beatInterval * 16 else 8.0
             val cue = plan.incomingCueTime
@@ -2830,7 +2830,7 @@ class CrossfadeController(
                     val zoneStart = fadeEndSec - overlap
                     val zoneEnd = fadeEndSec - overlap * 0.3
                     val phraseEnd = firstQuietGapSec(freshOut, zoneStart, zoneEnd) ?: zoneEnd
-                    val hot = vocalActivityBetween(freshOut, zoneStart, phraseEnd)?.let { it > 0.50 } ?: false
+                    val hot = vocalActivityBetween(freshOut, zoneStart, phraseEnd)?.let { it > 0.35 } ?: false
                     if (hot) {
                         render = render.copy(duckAMids = true)
                         TrackLog.d(TAG, "handoff resnapshot: duckA off->on (evidence landed after ARM)")
@@ -3831,11 +3831,11 @@ class CrossfadeController(
         // the compressed short-bed tables — the long-bed keyframes never
         // leave unity inside a phrase-switch bed.
         val shortBed = render.overlapSeconds in 0.01..EqSchedule.SHORT_BED_SECONDS
-        // Real-DJ long blend: 12s+ beds voice the spread long tables so the
-        // 12-20s gap (LONG_BED 20) no longer falls to the default unity hold.
-        // DJ-literature ownership applies from 12 s: a 12-16 s bed is still
-        // 6-8 bars of overlap, room enough for staged band handoffs.
-        val longBed = render.overlapSeconds >= 12.0
+        // Real-DJ long blend: beds at/over EqSchedule.LONG_BED_SECONDS
+        // voice the spread long tables. DJ-literature ownership applies
+        // from 12 s: a 12-16 s bed is still 6-8 bars of overlap, room
+        // enough for staged band handoffs.
+        val longBed = render.overlapSeconds >= EqSchedule.LONG_BED_SECONDS
         // Full-audit P1 M3: the vocal choke voices duck keys with the log
         // curve even when the ARM flags read clean.
         // Full-audit P2 S1: OR in the live recompute — the ARM flags only
@@ -4583,7 +4583,7 @@ class CrossfadeController(
         // filter goes with the EQ — deeper floor, higher entry corner.
         // D4: same live escalation as rideEq — a singing BED earns it too.
         val hardDuel = render.mixset && render.overlapSeconds >= 16.0 &&
-            (render.mixRecipe == MixRecipe.VOCAL_DUEL && render.vocalOverlap > 0.4 || liveDuel)
+            (render.mixRecipe == MixRecipe.VOCAL_DUEL && render.vocalOverlap > 0.25 || liveDuel)
         // Long-blend floor: analyzer masks under-report on dense masters, so
         // a "voiceless" 16 s+ bed still stacks two full-range decks through
         // the middle third. A 0.25 floor keeps gentle complementary filtering

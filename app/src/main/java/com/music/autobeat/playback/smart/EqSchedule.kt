@@ -109,7 +109,7 @@ object EqSchedule {
      * tables (mids/highs trade across the full 16–32 bars). Shorter beds
      * keep the existing tables untouched.
      */
-    const val LONG_BED_SECONDS = 20.0
+    const val LONG_BED_SECONDS = 12.0
 
     private fun outgoingKeys(
         type: TransitionType,

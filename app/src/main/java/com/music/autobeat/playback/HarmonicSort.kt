@@ -10,6 +10,7 @@ import com.music.autobeat.data.TrackLog
 import com.music.autobeat.data.settings.AppSettings
 import com.music.autobeat.playback.smart.TrackAnalysis
 import com.music.autobeat.playback.smart.TrackAnalyzer
+import com.music.autobeat.playback.smart.TrackFeatures
 import com.music.autobeat.playback.smart.camelotLabel
 import com.music.autobeat.playback.smart.camelotOf
 import com.music.autobeat.playback.smart.findBestCandidate
@@ -181,6 +182,13 @@ object HarmonicSort {
     private const val DROP_WINDOW_SECONDS = 30.0
     /** Ignored head/tail share of the curve: intro fades and outro tails lie. */
     private const val DROP_EDGE_TRIM = 0.10
+    /**
+     * Sort guard E2: tempo veto band vs the chain cursor. A candidate whose
+     * tempo sits outside 0.80–1.25x the cursor is never chained next — the
+     * pair scorer's drift term softens slopes, the veto forbids cliffs.
+     */
+    private const val SORT_TEMPO_VETO_MIN = 0.80
+    private const val SORT_TEMPO_VETO_MAX = 1.25
 
     private val _active = MutableStateFlow(false)
 
@@ -660,7 +668,26 @@ object HarmonicSort {
             return
         }
         val analyses = sortableSlots.associate { upcoming[it].mediaId to deps.analyzer.analysisFor(upcoming[it].mediaId) }
-        val anchor = player.currentMediaItem?.let { analyses[it.mediaId] ?: deps.analyzer.analysisFor(it.mediaId) }
+        // Sort guard E1: no quorum, no reorder. A scope that is mostly
+        // unmeasured or head-only must not be rearranged on guesses — only
+        // FULL (non-provisional, usable) analyses count toward the quorum.
+        val fullCount = sortableSlots.count { slot ->
+            val a = analyses[upcoming[slot].mediaId]
+            a != null && a.isUsable && !a.provisionalHead
+        }
+        if (fullCount * 2 < sortableSlots.size) {
+            TrackLog.d("Autobeat", "harmonic apply: no quorum ($fullCount/${sortableSlots.size} full), keeping order", null)
+            return
+        }
+        // Sort guard E3: suspect keys never route. Head-only passes and
+        // low-confidence labels sort by tempo/energy only until the full
+        // analysis lands — a blank key abstains from key routing instead of
+        // steering the chain with noise.
+        val sortAnalyses = analyses.mapValues { (_, a) ->
+            if (!a.provisionalHead && a.keyConfidence >= TrackFeatures.KEY_CONTESTED_CONFIDENCE) a
+            else a.copy(key = "")
+        }
+        val anchor = player.currentMediaItem?.let { sortAnalyses[it.mediaId] ?: deps.analyzer.analysisFor(it.mediaId)?.keySafe() }
             ?.takeIf { it.isUsable }
         val vibe = AppSettings.harmonicVibe.value
         // Arc targets need comparable energies: min-max normalize the scope's
@@ -695,7 +722,7 @@ object HarmonicSort {
         // One combined section: a measured AutoPlay track belongs wherever
         // the chain puts it, not fenced below a heading.
         val sorted = sortSection(
-            sortableSlots.map { upcoming[it] }, analyses, energies, anchor, vibe, anchorBpm, scopeBpms,
+            sortableSlots.map { upcoming[it] }, sortAnalyses, energies, anchor, vibe, anchorBpm, scopeBpms,
         )
         // Promote what the sort just measured: clear the flag on AutoPlay
         // tracks with a usable analysis so the heading drops below them.
@@ -779,6 +806,15 @@ object HarmonicSort {
     }
 
     /**
+     * Sort guard E3 helper: the key-safe view of an analysis. Head-only
+     * passes and low-confidence labels abstain from key routing (blank key)
+     * while keeping every other field, so they sort by tempo/energy only.
+     */
+    private fun TrackAnalysis.keySafe(): TrackAnalysis =
+        if (!provisionalHead && keyConfidence >= TrackFeatures.KEY_CONTESTED_CONFIDENCE) this
+        else copy(key = "")
+
+    /**
      * The highest-scoring chain through [tracks], greedy forward from [anchor] —
      * but scored like a DJ thinks, not just like a blend sounds. At each step
      * the winner maximizes
@@ -836,6 +872,17 @@ object HarmonicSort {
                 } else 0.0
                 remaining.forEachIndexed { index, item ->
                     val candidate = analyses[item.mediaId] ?: return@forEachIndexed
+                    // Sort guard E2: tempo veto — never chain across a tempo
+                    // cliff. Vetoed candidates are skipped, not scored; if
+                    // every candidate is vetoed the loop falls through to
+                    // index 0, keeping the queue moving instead of stalling.
+                    val cursorBpm = current.bpm
+                    if (cursorBpm > 0 && candidate.bpm > 0) {
+                        val ratio = candidate.bpm / cursorBpm
+                        if (ratio < SORT_TEMPO_VETO_MIN || ratio > SORT_TEMPO_VETO_MAX) {
+                            return@forEachIndexed
+                        }
+                    }
                     val pair = findBestCandidate(current, candidate)
                         ?: return@forEachIndexed
                     var score = pair.candidateScore

@@ -268,16 +268,17 @@ const val MIXSET_COOLDOWN_SLOPE_THRESHOLD = -0.002
 const val SILENCE_RMS_THRESHOLD = 0.08
 const val SILENCE_MIN_DURATION_SECONDS = 0.6
 /** v2 §9a: PLAIN_DISSOLVE reverb wet on the outgoing track. Voiced under the DSP cap. */
-// Full-plan P5: authored 0.40 exceeded DSP MAX_WET=0.34 and clipped ~1 dB
-// silently every dissolve — plan at or under the clamp from now on.
+// Authored 0.30 sits under the ReverbProcessor MAX_WET=0.45 — plan at or
+// under the clamp from now on.
 const val PLAIN_DISSOLVE_REVERB_WET = 0.30
 /** v2 §9b: heavy-clash forced echo/reverb amounts (voiced under the DSP caps). */
-// Full-plan P5: authored 0.45 clipped against MAX_WET=0.34 — cap it here.
+// Heavy-clash reverb voices the legacy 0.34 (ReverbProcessor MAX_WET is now
+// 0.45); the echo amount voices the EchoSendProcessor MAX_WET=0.65.
 const val HEAVY_CLASH_REVERB_WET = 0.34
 const val HEAVY_CLASH_ECHO_AMOUNT = 0.50
 /** v2 §9b: reverb freeze point after transition start. */
 const val HEAVY_CLASH_FREEZE_OFFSET_SEC = 3.5
-/** Automix reverb: echo-out wash voices the DSP max (ReverbProcessor MAX_WET = 0.34). */
+/** Automix reverb: echo-out wash voices the legacy 0.34 (ReverbProcessor MAX_WET = 0.45). */
 const val ECHO_OUT_REVERB_WET = 0.34
 /** Automix reverb: beat-matched blends carry a bed of reverb under the EQ swap. */
 const val BLEND_REVERB_WET = 0.25
