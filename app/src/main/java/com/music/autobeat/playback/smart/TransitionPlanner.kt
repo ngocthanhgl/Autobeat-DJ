@@ -3370,7 +3370,7 @@ private fun planTransitionInner(
     if (mixset) {
         val maxBars = when (selectedType) {
             TransitionType.HARMONIC_BLEND, TransitionType.SMOOTH_CROSSFADE,
-            TransitionType.OCTAVE_BLEND, TransitionType.HALF_TIME,
+            TransitionType.OCTAVE_BLEND,
             TransitionType.HARD_CUT, TransitionType.LOOP_CUT_DROP,
             TransitionType.LOOP_ROLL -> 16.0
             else -> 8.0
