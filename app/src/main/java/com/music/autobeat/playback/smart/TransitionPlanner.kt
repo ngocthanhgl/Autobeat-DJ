@@ -992,7 +992,7 @@ private fun echoOutPlan(
     val typeCeiling = phraseWindowCeiling(analysis, nextAnalysis, mixAnchor)
     val fade = min(32.0 * beatSeconds, min(mixAnchor * 0.6, ABSOLUTE_MAX_TRANSITION_SECONDS))
         .coerceAtMost(typeCeiling)
-        .coerceAtLeast(1.0)
+        .coerceAtLeast(if (mixset) 8.0 else 1.0)
     val targetStart = max(0.0, mixAnchor - fade)
     // The track plays its floor: never start the wash before it (normal mode).
     val playFloorSeconds = if (mixset) 0.0 else 0.8 * length
@@ -3363,6 +3363,21 @@ private fun planTransitionInner(
         4.0
     }
     maximumOverlap = min(maximumOverlap, clashOverlapCap)
+    // Log-16 fix: style-bound ceilings. A same-grid DJ_BLEND was running
+    // 45 s because typeBeats let a 32-bar phrase stand — that is two songs
+    // on at once, not a mix. Cap by the style slot: blends ≤ 16 bars,
+    // filter/echo ≤ 8 bars. Stock path untouched.
+    if (mixset) {
+        val maxBars = when (selectedType) {
+            TransitionType.HARMONIC_BLEND, TransitionType.SMOOTH_CROSSFADE,
+            TransitionType.OCTAVE_BLEND, TransitionType.HALF_TIME,
+            TransitionType.HARD_CUT, TransitionType.LOOP_CUT_DROP,
+            TransitionType.LOOP_ROLL -> 16.0
+            else -> 8.0
+        }
+        val cap = (maxBars * beatSeconds * 4.0)
+        maximumOverlap = min(maximumOverlap, cap)
+    }
     val analyzedPickup = nextAnalysis.audibleStartTime ?: nextAnalysis.pickupTime
     val pickupSeconds = if (analyzedPickup != null && analyzedPickup.isFinite() && analyzedPickup >= 0) {
         analyzedPickup

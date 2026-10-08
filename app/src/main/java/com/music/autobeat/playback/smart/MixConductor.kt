@@ -88,7 +88,7 @@ fun selectMixRecipe(
     // instrumental bed with open mids and a late swap under sung content.
     // A 0.13 collision the choke already treats as a duel must not get a
     // bed recipe.
-    if (duckA || delayB || forceDuck || vocalOverlap > VOCAL_DUEL_OVERLAP) {
+    if (vocalOverlap > VOCAL_DUEL_OVERLAP) {
         return MixRecipe.VOCAL_DUEL
     }
     return MixRecipe.INSTRUMENTAL_BED

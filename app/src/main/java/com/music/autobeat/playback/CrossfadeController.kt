@@ -558,6 +558,11 @@ class CrossfadeController(
     private var pendingEqOpenFromMid = 1f
     private var pendingEqOpenFromHigh = 1f
     private var pendingEqOpenStartMs = -1L
+    // Finish-volume glide: same gated-unity shape as the EQ open above, for
+    // the session deck's volume after the handoff.
+    private var pendingFinishVolumeFrom = 1f
+    private var pendingFinishVolumeStartMs = -1L
+    private var pendingFinishVolumePlayer: ExoPlayer? = null
     // Tempo no-snap: finish() never resets the rate at full volume anymore.
     // Instead it arms this post-handoff glide — the session deck walks from
     // the frozen live rate/pitch home over TEMPO_HOME_MS, stepped in tick()
@@ -721,14 +726,6 @@ class CrossfadeController(
     private val liveDuel: Boolean
         get() = duelHotSinceMs > 0L &&
             SystemClock.elapsedRealtime() - duelHotSinceMs >= DUEL_ESCALATE_MS
-    /**
-     * P3 landing vacuum: a 150 ms hole in the outgoing deck just before the
-     * handoff — silence-before-impact so the incoming track lands as a
-     * restart, not a layer. Armed once per fade at outProgress 0.97;
-     * self-limiting (expires even if done is late). Rearmed in begin().
-     */
-    private var vacuumUntilMs = 0L
-    private var vacuumFired = false
     // DJ reactive engine R3: mid-blend monitors (see rideReactive). An early
     // cut fires done once; a hold parks the handoff until a deadline; the
     // clash duck reuses the live-duck voice path. Rearmed in begin().
@@ -1381,6 +1378,25 @@ class CrossfadeController(
                     pendingEqOpenFromMid + (1f - pendingEqOpenFromMid) * t,
                     pendingEqOpenFromHigh + (1f - pendingEqOpenFromHigh) * t,
                 )
+            }
+        }
+        // Finish-volume glide: same 150 ms stepped ramp as the EQ open so the
+        // end-of-mix settle never spikes the incoming deck.
+        if (pendingFinishVolumeStartMs >= 0L) {
+            val deck = pendingFinishVolumePlayer
+            if (deck == null || deck !== active()) {
+                pendingFinishVolumeStartMs = -1L
+                pendingFinishVolumePlayer = null
+            } else {
+                val t = (SystemClock.elapsedRealtime() - pendingFinishVolumeStartMs).toFloat() /
+                    EQ_OPEN_MS
+                if (t >= 1f) {
+                    deck.volume = 1f
+                    pendingFinishVolumeStartMs = -1L
+                    pendingFinishVolumePlayer = null
+                } else {
+                    deck.volume = pendingFinishVolumeFrom + (1f - pendingFinishVolumeFrom) * t
+                }
             }
         }
         // Tempo no-snap: post-handoff glide armed in finish() — same
@@ -2674,6 +2690,11 @@ class CrossfadeController(
             eqFilters.incoming(1f, 1f, 1f)
             pendingEqOpenStartMs = -1L
         }
+        if (pendingFinishVolumeStartMs >= 0L) {
+            pendingFinishVolumePlayer?.volume = 1f
+            pendingFinishVolumeStartMs = -1L
+            pendingFinishVolumePlayer = null
+        }
         // Flush a post-handoff tempo glide in flight too: disarm WITHOUT
         // completing — completing would snap the still-audible session deck
         // (now this fade's outgoing) to home at full volume, the exact snap
@@ -2691,9 +2712,6 @@ class CrossfadeController(
         // P1: sidechain followers re-armed (envelopes, not latches).
         duckA.reset()
         duckB.reset()
-        // P3: landing vacuum re-armed.
-        vacuumUntilMs = 0L
-        vacuumFired = false
         liveSingA = 0f
         liveSingB = 0f
         lastVocalSlewAt = 0L
@@ -3376,24 +3394,6 @@ class CrossfadeController(
         } else if (render.mixset && !smartFadeActive && progress >= 0.80f) {
             out.volume = muteRampGain(out.volume)
         }
-        // P3 landing vacuum: at outProgress 0.97 both decks drop to a 150 ms
-        // near-silence while the tails ring — the hole the drop lands in.
-        // Skipped on cut families (the flip is the gesture). finish()
-        // restores the incoming deck to full, so the sequence is hole →
-        // impact, never hole → hole.
-        if (!vacuumFired && !handedOff && render.mixset && smartFadeActive &&
-            (render.style == TransitionStyle.DJ_BLEND || render.style == TransitionStyle.DJ_FILTER) &&
-            render.overlapSeconds >= 8.0 &&
-            outProgress >= 0.97f
-        ) {
-            vacuumFired = true
-            vacuumUntilMs = SystemClock.elapsedRealtime() + 150L
-            TrackLog.d(TAG, "landing vacuum armed at outProgress=$outProgress")
-        }
-        if (vacuumUntilMs > 0L && SystemClock.elapsedRealtime() < vacuumUntilMs) {
-            out.volume = out.volume * 0.12f
-            player.volume = player.volume * 0.12f
-        }
         // v2 §7d/§11.2: no shelf on the processor, so the "low-shelf +3dB"
         // accent is a one-tick dip of the incoming high-pass to 80 Hz at
         // each planned phrase start — the spec's 16 ms pulse lands on the
@@ -3768,7 +3768,14 @@ class CrossfadeController(
                 // No redundant writes: setting what is already set is free on
                 // paper, but every sink call is a chance for the platform to
                 // do work at full volume.
-                if (it.volume < 0.999f) it.volume = 1f
+                // Volume-snap fix: the end-of-mix volume surge was this
+                // immediate write at full volume. Arm the stepped glide
+                // instead; nothing commits here.
+                if (it.volume < 0.999f) {
+                    pendingFinishVolumeFrom = it.volume
+                    pendingFinishVolumeStartMs = SystemClock.elapsedRealtime()
+                    pendingFinishVolumePlayer = it
+                }
                 // P3 landing sub-reset: the incoming deck stands alone now,
                 // so its filter snaps open (wet→dry with the room, bass back
                 // at full). The processor glides to the target, so the snap
@@ -4238,10 +4245,8 @@ class CrossfadeController(
             // P3 convergence: on long beds the throw arms earlier (from 0.30,
             // inaudible) so space is already in the room before the last
             // phrase — short blends keep the punchy 0.55 attack.
-            // P3 (triple-choke fix): the vacuum at 0.97 chokes dry AND wet
-            // together, so a 0.55 attack gets ~2 ticks before burial — the
-            // tail rings but its attack is never heard (room tone, not dub).
-            // Any quiet tail (follower near-silence) earns the early 0.35
+            // The "triple-choke fix" vacuum is gone — no layered dry/wet dip
+            // at the flip any more. Any quiet tail (follower near-silence) earns the early 0.35
             // attack regardless of bed length; a singing tail keeps the late
             // attack so the throw never washes over words.
             val attackStart =
