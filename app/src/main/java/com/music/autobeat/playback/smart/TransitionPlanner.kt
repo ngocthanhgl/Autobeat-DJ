@@ -506,6 +506,19 @@ private fun blocked(reason: String, transitionStart: Double = 0.0, transitionEnd
  * phase drift when the key agrees, cut the rest. [highEnergyB] is read at
  * the incoming buildup start, not at the proxy entry.
  */
+/**
+ * Blend-veto note helper (P2): records which gate rejected a blend into the
+ * verdict's reasons so the session log names it. The reasons list is built
+ * fresh per plan computation and embedded by reference, so one replaceable
+ * tag per computation is enough — a later veto overwrites an earlier one.
+ */
+private fun noteVeto(policy: TransitionPolicyVerdict, veto: String) {
+    (policy.reasons as? MutableList<String>)?.let {
+        it.removeAll { s -> s.startsWith("blend-veto=") }
+        it.add("blend-veto=$veto")
+    }
+}
+
 fun selectTransitionType(
     score: CompatibilityScore,
     tier: TransitionTier,
@@ -522,58 +535,62 @@ fun selectTransitionType(
     // Booth collision veto: two sustained peaks with no trusted drop to cut
     // on never earn a long bed, however well the tempo matches. DJ-only;
     // stock callers keep the legacy matrix untouched.
+    //
+    // Returns the type plus the blend-veto tag: "none" when the verdict is a
+    // blend-family handoff, otherwise the gate that rejected the blend.
     mixset: Boolean = false,
-): TransitionType {
+): Pair<TransitionType, String> {
     if (mixset && highEnergyA && highEnergyB && !hasDropInB) {
         // Two drops, no trusted arrival to cut on: wash when the grids drift,
         // slam on the phrase when they hold — never a 60 s blend.
-        return if (score.bpm < 0.70) TransitionType.ECHO_REVERB_OUT else TransitionType.HARD_CUT
+        return if (score.bpm < 0.70) TransitionType.ECHO_REVERB_OUT to "booth-wash"
+        else TransitionType.HARD_CUT to "booth-cut"
     }
     // Phase B3/B4: one-step wash downgrade for a FILTER verdict whose ends
     // are weak (buried/vetoed rank or unranked fallback) or whose risers
     // fight each other.
-    fun washDowngrade(): TransitionType =
+    fun washDowngrade(): Pair<TransitionType, String> =
         if (introQuality < 0 || outroQuality < 0 ||
             trajectory == EnergyTrajectory.A_UP_B_UP
         ) {
-            TransitionType.ECHO_REVERB_OUT
+            TransitionType.ECHO_REVERB_OUT to "wash-downgrade"
         } else {
-            TransitionType.FILTER_SWEEP
+            TransitionType.FILTER_SWEEP to "none"
         }
     if (tier == TransitionTier.DJ_ASSISTED) {
         return when {
-            score.bpm < 0.60 -> TransitionType.ECHO_REVERB_OUT
-            score.key >= 0.70 -> TransitionType.FILTER_SWEEP
-            else -> TransitionType.HARD_CUT
+            score.bpm < 0.60 -> TransitionType.ECHO_REVERB_OUT to "assist-tempo"
+            score.key >= 0.70 -> TransitionType.FILTER_SWEEP to "none"
+            else -> TransitionType.HARD_CUT to "assist-cut"
         }
     }
     // Phase B2: the harmonic verdict keeps its blend; the near-harmonic band
     // below it keeps SMOOTH for singing pairs (thresholds unchanged) and
     // earns the filter for clean ones — a slight key rub under a sweep reads
     // as tension, under a cut as a mistake. That cut was the perverse hole.
-    if (score.bpm >= 0.70 && score.key >= 0.85) return TransitionType.HARMONIC_BLEND
+    if (score.bpm >= 0.70 && score.key >= 0.85) return TransitionType.HARMONIC_BLEND to "none"
     if (score.bpm >= 0.70 && score.key >= 0.70) {
-        return if (score.vocal >= 0.60) TransitionType.SMOOTH_CROSSFADE else washDowngrade()
+        return if (score.vocal >= 0.60) TransitionType.SMOOTH_CROSSFADE to "none" else washDowngrade()
     }
     return when {
         // Deleted dead HALF_TIME_BLEND (no live caller; both sites diverted to
         // filter wash): harmonic-ratio pairs ride the closing filter at rate
         // 1.0 instead of sustained shared-BPM stretch. Analyzer tier stays,
         // renderer no longer stretches.
-        tier == TransitionTier.HALF_TIME -> TransitionType.FILTER_SWEEP
-        highEnergyA && highEnergyB && hasDropInB -> TransitionType.LOOP_CUT_DROP
+        tier == TransitionTier.HALF_TIME -> TransitionType.FILTER_SWEEP to "none"
+        highEnergyA && highEnergyB && hasDropInB -> TransitionType.LOOP_CUT_DROP to "loop-drop-cut"
         // Phase B1: the old dead band (0.50–0.70) fell through to HARD_CUT.
         // A supported key earns the closing filter; an unsupported one washes.
         // (The old bpm<0.50 special-case is folded in: binary bpmScore makes it
         // indistinguishable from <0.70 — every drifted pair washes.)
         score.bpm < 0.70 && score.key >= 0.70 -> washDowngrade()
-        score.bpm < 0.70 -> TransitionType.ECHO_REVERB_OUT
-        score.key < 0.70 -> TransitionType.FILTER_SWEEP
+        score.bpm < 0.70 -> TransitionType.ECHO_REVERB_OUT to "tempo-distance"
+        score.key < 0.70 -> TransitionType.FILTER_SWEEP to "none"
         // Full-audit F2: terminal clash default. The old `else -> HARD_CUT`
         // was unreachable (476-479 settle every bpm>=0.70 && key>=0.70, and the
         // branch above takes the rest); HARD_CUT enters only via collision
         // veto, DJ_ASSISTED else, vocalWall, short-tail, or same-file.
-        else -> TransitionType.FILTER_SWEEP
+        else -> TransitionType.FILTER_SWEEP to "none"
     }
 }
 
@@ -1956,9 +1973,11 @@ private fun washWetFor(): Double =
     AppSettings.djIntensity.value.washWet * AppSettings.djIntensity.value.revWetFactor
 /**
  * Default bed-wash scale: blends that earn neither a throw nor a breakdown
- * wash still get space in the room, at half the voiced wet.
+ * wash still get space in the room, at the full voiced wet. Session-log-12:
+ * the half-wet bed (~0.05 effective) was inaudible glue — the washes that
+ * carry whole transitions need to be felt, still far under the DSP cap.
  */
-private const val BED_WASH_SCALE = 0.5
+private const val BED_WASH_SCALE = 1.0
 
 /**
  * DJ send-effect selector (F1 throw / F3 wash, DJ-only): which, if any, send
@@ -1984,14 +2003,17 @@ private fun djSendEffectFor(
     val tailMid = (tailStart + transitionEnd) / 2.0
     // Throw: a vocal phrase ending inside the tail while the incoming entry
     // stays clean — the "im here" moment. A 1-beat delay with ~4 feedback
-    // tails rings ~2 s under the incoming track.
+    // tails rings ~2 s under the incoming track. Session-log-12: the
+    // 0.42/0.35 gates never opened once (masks under-report on dense
+    // masters, so a true phrase-end reads ~0.35-0.5, not 0.8) — every blend
+    // ran dry. Relaxed to meet the masks where they actually read.
     val early = vocalActivityBetween(analysis, tailStart, tailMid)
     val late = vocalActivityBetween(analysis, tailMid, transitionEnd)
-    if (early != null && late != null && early >= 0.42 && late <= 0.35) {
+    if (early != null && late != null && early >= 0.35 && late <= 0.42) {
         val inRate = incomingPlaybackRate.takeIf { it.isFinite() && it > 0.0 } ?: 1.0
         val inBeat = nextAnalysis.beatInterval.takeIf { it.isFinite() && it > 0.0 } ?: 0.5
         val entry = vocalActivityBetween(nextAnalysis, incomingCueTime, incomingCueTime + 4.0 * inBeat / inRate)
-        if (entry != null && entry <= 0.45) return true to 0.0
+        if (entry != null && entry <= 0.55) return true to 0.0
     }
     // Wash: the outgoing tail expiring into a breakdown (tail energy under
     // half the track mean) — a bed of reverb under the handoff instead of
@@ -3039,6 +3061,7 @@ private fun planTransitionInner(
         val beatOutA = analysis.beatInterval.orZero().takeIf { it > 0 }
             ?: if (analysis.bpm.orZero() > 0) 60 / analysis.bpm else 0.5
         if (realDropInB && dropInB != null && mixAnchor >= 32 * beatOutA) {
+            noteVeto(policy, "vocal-wall-cut")
             return applyMixsetFireFloor(
                 cutPlan(
                     analysis, nextAnalysis, length, nextLength,
@@ -3048,6 +3071,7 @@ private fun planTransitionInner(
                 length, mixset,
             )
         }
+        noteVeto(policy, "vocal-wall-wash")
         return applyMixsetFireFloor(
             if (proxyScore.bpm >= 0.60) {
                 cutPlan(
@@ -3085,11 +3109,13 @@ private fun planTransitionInner(
         windowSlope(nextAnalysis.energyCurve, proxyEntry, proxyEntry + 64 * intervalB),
     )
     var selectedType = if (beatOrHalf || policy.tier == TransitionTier.DJ_ASSISTED) {
-        selectTransitionType(
+        val (type, veto) = selectTransitionType(
             proxyScore, policy.tier, highEnergyA, highEnergyB, realDropInB,
             introQuality = bestIntroRank, outroQuality = bestOutroRank, trajectory = trajectory,
             mixset = mixset,
         )
+        noteVeto(policy, veto)
+        type
     } else {
         // Unreachable today (PLAIN returns upstream), kept as the closed
         // default so a future tier degrades to a blend, never to a crash.
@@ -3114,6 +3140,7 @@ private fun planTransitionInner(
         if (contentSelectsCut(analysis, nextAnalysis, outWs, mixAnchor) ||
             contentSelectsCut(analysis, nextAnalysis, proxyEntry, inWe)
         ) {
+            noteVeto(policy, "vocal-cut")
             selectedType = if (proxyScore.bpm < 0.70) TransitionType.ECHO_REVERB_OUT
             else TransitionType.HARD_CUT
         }
@@ -3125,6 +3152,7 @@ private fun planTransitionInner(
             selectedType == TransitionType.HARMONIC_BLEND ||
             selectedType == TransitionType.FILTER_SWEEP)
     ) {
+        noteVeto(policy, "energy-floor")
         return applyMixsetFireFloor(
             washPlan(
                 analysis, nextAnalysis, length, nextLength,

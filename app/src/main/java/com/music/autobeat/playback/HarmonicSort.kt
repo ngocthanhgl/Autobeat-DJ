@@ -668,17 +668,10 @@ object HarmonicSort {
             return
         }
         val analyses = sortableSlots.associate { upcoming[it].mediaId to deps.analyzer.analysisFor(upcoming[it].mediaId) }
-        // Sort guard E1: no quorum, no reorder. A scope that is mostly
-        // unmeasured or head-only must not be rearranged on guesses — only
-        // FULL (non-provisional, usable) analyses count toward the quorum.
-        val fullCount = sortableSlots.count { slot ->
-            val a = analyses[upcoming[slot].mediaId]
-            a != null && a.isUsable && !a.provisionalHead
-        }
-        if (fullCount * 2 < sortableSlots.size) {
-            TrackLog.d("Autobeat", "harmonic apply: no quorum ($fullCount/${sortableSlots.size} full), keeping order", null)
-            return
-        }
+        // No quorum gate: unmeasured tracks keep their relative order at the
+        // end (see sortSection's usable/failed partition), so sorting with
+        // the first answers is safe — and realtime. Suspect keys never steer
+        // (sortAnalyses below) and tempo cliffs are vetoed per candidate.
         // Sort guard E3: suspect keys never route. Head-only passes and
         // low-confidence labels sort by tempo/energy only until the full
         // analysis lands — a blank key abstains from key routing instead of

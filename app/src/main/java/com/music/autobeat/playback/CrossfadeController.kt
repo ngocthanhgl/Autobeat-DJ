@@ -839,7 +839,12 @@ class CrossfadeController(
         // D4: sustained live heat escalates the duel verdict — a BED that
         // starts singing mid-fade earns the cubic kill after 2 s above half
         // envelope, instead of the polite quadratic forever.
-        val hot = maxOf(envA, envB) > 0.5f
+        // Session-log-12: escalation fired ~2 s into every 4-8 s wash while
+        // the plan read instrumental — a -5 dB slam mid-wash is the harsh
+        // pumping listeners hear. Escalation is a long-bed privilege: short
+        // fades keep the proportional envelope duck only.
+        val longEnoughToDuel = render.overlapSeconds >= EqSchedule.LONG_BED_SECONDS
+        val hot = longEnoughToDuel && maxOf(envA, envB) > 0.5f
         if (hot) {
             if (duelHotSinceMs <= 0L) duelHotSinceMs = now
             if (!liveDuelLogged && now - duelHotSinceMs >= DUEL_ESCALATE_MS) {
@@ -944,8 +949,9 @@ class CrossfadeController(
         // P1: kicks the sidechain envelope to full instead of engaging a
         // latch — the follower's hold+release brings it back down, so the
         // surprise vocal gets ducked now without thinning the deck after
-        // the phrase ends.
-        if (!reactDuckFired) {
+        // the phrase ends. Long beds only (same session-log-12 reason as
+        // the D4 gate above): no envelope slam inside a short wash.
+        if (!reactDuckFired && render.overlapSeconds >= EqSchedule.LONG_BED_SECONDS) {
             val aHot = (maskActivity(render.outgoingVocalTimes, render.outgoingVocalMask, aNow - 2.0, aNow)
                 ?: 0.0) >= VOCAL_ACTIVE_THRESHOLD
             val bHot = (maskActivity(render.incomingVocalTimes, render.incomingVocalMask, bNow - 2.0, bNow)
