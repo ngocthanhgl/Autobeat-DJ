@@ -138,7 +138,7 @@ object HarmonicSort {
      * deviations both live ~0..1, so 0.6 lets a great handover beat the arc
      * but not ignore it.
      */
-    const val VIBE_LAMBDA = 0.6
+    const val VIBE_LAMBDA = 1.6
 
     /**
      * Key-route memory: a greedy that only sees the last handover wanders the
@@ -697,24 +697,39 @@ object HarmonicSort {
         // 0.5 everywhere, which degrades exactly to the old pair-only greedy.
         val rawEnergies = analyses.mapValues { (_, analysis) -> dropEnergy(analysis) }
         val finite = rawEnergies.values.filterNotNull().filter { it.isFinite() }
-        val eMin = finite.minOrNull() ?: 0.0
-        val eMax = finite.maxOrNull() ?: 0.0
+        // p10–p90 percentile anchor instead of raw min–max: mastered libraries
+        // cluster at the extremes (all loud, all compressed), so min–max crushes
+        // the usable range and every track reads ~0.5. The percentile window
+        // tracks the intrage-scope spread instead, so a vibe target separates
+        // tracks even when the whole album is loud.
+        val sortedFinite = finite.sorted()
+        fun percentile(q: Double): Double =
+            if (sortedFinite.isEmpty()) 0.0
+            else sortedFinite[((sortedFinite.size - 1) * q).toInt()]
+        val eLo = percentile(0.10)
+        val eHi = percentile(0.90)
         // Absolute anchor: 70% scope-relative shape, 30% master truth, so a
         // loud crushed track still reads hotter than a quiet dynamic one in
         // the same scope. Unmeasured masters fall back to relative only.
         val absolute = analyses.mapValues { (_, analysis) -> absoluteEnergy(analysis) }
         val energies = rawEnergies.mapValues { (id, raw) ->
-            val rel = if (raw == null || !raw.isFinite() || eMax <= eMin) 0.5
-                else ((raw - eMin) / (eMax - eMin)).coerceIn(0.0, 1.0)
+            val rel = if (raw == null || !raw.isFinite() || eHi <= eLo) 0.5
+                else ((raw - eLo) / (eHi - eLo)).coerceIn(0.0, 1.0)
             val abs = absolute[id]
             val base = if (abs == null) rel else (0.7 * rel + 0.3 * abs).coerceIn(0.0, 1.0)
             (0.5 + (base - 0.5) * VIBE_SPREAD_GAIN).coerceIn(0.0, 1.0)
         }
-        // Flat-scope detector: when every energy reads the same, the arc
-        // penalty shifts all candidates in a slot equally and the argmax —
-        // and therefore the order — cannot move under any vibe. Say so out
-        // loud instead of re-sorting silently into the identical sequence.
+        // Always log the scope spread so the session log shows whether a vibe
+        // tap can move the order; the flat-scope warning stays, but the arc
+        // penalty is no longer skipped — percentile scaling already flattens
+        // degenerate scopes back to 0.5 everywhere.
         val energySpread = (energies.values.maxOrNull() ?: 0.5) - (energies.values.minOrNull() ?: 0.5)
+        TrackLog.d(
+            "Autobeat",
+            "harmonic energies: spread=${"%.3f".format(Locale.ROOT, energySpread)} " +
+                "p10=${"%.3f".format(Locale.ROOT, eLo)} p90=${"%.3f".format(Locale.ROOT, eHi)} for $vibe",
+            null,
+        )
         if (energySpread < 0.05) {
             TrackLog.d("Autobeat", "harmonic vibe-no-op: energies flat (spread ${"%.3f".format(Locale.ROOT, energySpread)}), $vibe keeps pair order", null)
         }
