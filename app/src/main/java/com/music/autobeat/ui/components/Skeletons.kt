@@ -200,7 +200,7 @@ private fun HeroShelfSkeleton() {
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 userScrollEnabled = false,
             ) {
-                items(2) {
+                        items(2, key = { "hero-shimmer:$it" }) {
                     ShimmerBox(
                         modifier = Modifier.width(cardWidth).aspectRatio(HERO_CARD_RATIO),
                         shape = RoundedCornerShape(18.dp),
@@ -239,7 +239,7 @@ fun LazyListScope.recentlyPlayedSkeleton(listLayout: Boolean) {
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         userScrollEnabled = false,
                     ) {
-                        items(2) {
+                items(2, key = { "hero-shimmer:$it" }) {
                             ShimmerBox(
                                 modifier = Modifier.width(cardWidth).aspectRatio(HERO_CARD_RATIO),
                                 shape = RoundedCornerShape(18.dp),
@@ -279,7 +279,7 @@ fun ShelfSkeleton(index: Int = 0, cardWidth: Dp = SHELF_CARD_WIDTH, cardCorner: 
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             userScrollEnabled = false,
         ) {
-            items(3) { card ->
+            items(3, key = { "shelf-shimmer:$it" }) { card ->
                 Column(Modifier.width(cardWidth)) {
                     ShimmerBox(
                         modifier = Modifier.width(cardWidth).aspectRatio(1f),

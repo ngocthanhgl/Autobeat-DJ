@@ -1657,7 +1657,13 @@ fun NowPlayingScreen(
     // handle doesn't snap back and then jump forward once loading finishes.
     var pendingSeek by remember { mutableStateOf<Float?>(null) }
 
-    val fraction = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+    // Derived, not computed: position ticks twice a second, and without this
+    // every consumer of the fraction recomposes the whole scope each tick.
+    val fraction by remember(positionMs, durationMs) {
+        derivedStateOf {
+            if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+        }
+    }
     val shown = when {
         scrubbing -> scrubValue
         pendingSeek != null -> pendingSeek!!
@@ -4120,10 +4126,16 @@ private fun WidePlayerControls(
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
 
-    val liveFraction = if (durationMs > 0) {
-        (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-    } else {
-        0f
+    // Derived, not computed: position ticks twice a second, and without this
+    // every consumer of the fraction recomposes the whole scope each tick.
+    val liveFraction by remember(positionMs, durationMs) {
+        derivedStateOf {
+            if (durationMs > 0) {
+                (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+        }
     }
     val shown = if (scrubbing) scrubValue else liveFraction
 
@@ -5797,7 +5809,9 @@ private fun LyricsPanel(
         ),
         verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        itemsIndexed(lines) { index, line ->
+        // Keyed: the translation toggle replaces `lines` wholesale, and
+        // without keys the list loses scroll identity and rebuilds every row.
+        itemsIndexed(lines, key = { _, line -> "${line.timeMs}|${line.text}" }) { index, line ->
             if (!isSynced && Genius.isSectionHeader(line.text)) {
                 val sectionTitle = line.text.removePrefix("[").removeSuffix("]").trim()
                 Column(
@@ -5844,14 +5858,14 @@ private fun LyricsPanel(
             // just sung as well as ahead, and everything past that recedes to
             // the same floor rather than fading to nothing.
             val step = distance.coerceAtMost(LINE_FALLOFF_ALPHA.lastIndex)
-            val blur by animateDpAsState(
-                targetValue = when {
-                    !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive -> 0.dp
-                    else -> LINE_FALLOFF_BLUR[step]
-                },
-                animationSpec = tween(LYRIC_SETTLE_MS, easing = LYRIC_EASING),
-                label = "lyricBlur",
-            )
+            // Static falloff, not animated: the steps are already quantized
+            // (0/1/1/1.7/2.4dp) and the alpha glides alongside, so a tween here
+            // bought nothing but sixty concurrent blur animations — each one
+            // redrawing an unbounded blur every frame of every handover.
+            val blur = when {
+                !isSynced || reduceDynamicBlur || !lyricsBlur || browsing || isActive -> 0.dp
+                else -> LINE_FALLOFF_BLUR[step]
+            }
             val lineAlpha by animateFloatAsState(
                 targetValue = when {
                     !isSynced -> 0.95f
@@ -8155,15 +8169,23 @@ private fun KeyBpmRow(
 ) {
     // The waiting dots breathe rather than blink: the same
     // infinite-transition idiom as the lossless shimmer, slower and subtler.
-    val dotsAlpha by rememberInfiniteTransition(label = "keybpm-dots").animateFloat(
-        initialValue = 0.3f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "keybpm-dots-alpha",
-    )
+    // Gated on visibility: once both sides resolve, the transition leaves
+    // composition instead of recomposing this row forever.
+    val dotsVisible = (camelotLabel(currentKey) == null && currentBpm <= 0) ||
+        (hasNext && camelotLabel(nextKey) == null && nextBpm <= 0)
+    val dotsAlpha = if (dotsVisible) {
+        rememberInfiniteTransition(label = "keybpm-dots").animateFloat(
+            initialValue = 0.3f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_200, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "keybpm-dots-alpha",
+        ).value
+    } else {
+        0.45f
+    }
     // Green when key-harmonic AND tempo-tight, orange when key-harmonic
     // but the stretcher has real work to do (>±3%), dim red on a key
     // clash, neutral while either side is still being measured.

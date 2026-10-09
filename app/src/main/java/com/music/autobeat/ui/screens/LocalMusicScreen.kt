@@ -537,7 +537,7 @@ private fun SongsTab(
                     modifier = Modifier.padding(horizontal = 0.dp, vertical = 10.dp),
                 )
             }
-            itemsIndexed(songs) { index, song ->
+            itemsIndexed(songs, key = { _, song -> song.videoId }) { index, song ->
                 SongGridCard(
                     song = song,
                     selected = song.videoId in selectedIds,
@@ -560,7 +560,7 @@ private fun SongsTab(
                     title = pluralStringResource(R.plurals.song_count_plural, songs.size, songs.size),
                 )
             }
-            itemsIndexed(songs) { index, song ->
+            itemsIndexed(songs, key = { _, song -> song.videoId }) { index, song ->
                 SongRow(
                     song = song,
                     selected = song.videoId in selectedIds,
@@ -1380,7 +1380,7 @@ private fun DrillDownSongList(
                     onShuffle = onShuffle,
                 )
             }
-            itemsIndexed(songs) { index, song ->
+            itemsIndexed(songs, key = { _, song -> song.videoId }) { index, song ->
                 SongGridCard(
                     song = song,
                     selected = song.videoId in selectedIds,
@@ -1413,7 +1413,7 @@ private fun DrillDownSongList(
                     onShuffle = onShuffle,
                 )
             }
-            itemsIndexed(songs) { index, song ->
+            itemsIndexed(songs, key = { _, song -> song.videoId }) { index, song ->
                 SongRow(
                     song = song,
                     selected = song.videoId in selectedIds,

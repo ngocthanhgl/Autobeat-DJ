@@ -250,7 +250,9 @@ fun FloatingBottomBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .onSizeChanged { rowSize = it }
-                .pointerInput(Unit) {
+                // Keyed on tab count + step: a first-composition zero step or a
+                // rotation restarts the detector instead of dividing by stale px.
+                .pointerInput(tabs.size, tabStepPx) {
                     var totalDrag = 0f
                     detectHorizontalDragGestures(
                         onDragStart = { totalDrag = 0f },

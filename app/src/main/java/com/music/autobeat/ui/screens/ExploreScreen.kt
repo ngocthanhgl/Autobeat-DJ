@@ -40,8 +40,10 @@ import com.music.autobeat.R
 import com.music.autobeat.data.model.HomeShelf
 import com.music.autobeat.data.model.MoodGenre
 import com.music.autobeat.data.model.MoodGenreSection
+import com.music.autobeat.data.model.ROW_ART_PX
 import com.music.autobeat.data.model.ShelfItem
 import com.music.autobeat.data.model.UiState
+import com.music.autobeat.data.model.artworkAt
 import com.music.autobeat.ui.components.MessageState
 import com.music.autobeat.ui.components.PAGE_GUTTER
 import com.music.autobeat.ui.components.PullToRefresh
@@ -157,7 +159,8 @@ private fun MoodGenreCard(
         ) {
             item.thumbnailUrl?.let { artwork ->
                 AsyncImage(
-                    model = artwork,
+                    // Sized rendition, not the raw URL: the box is 82dp.
+                    model = artwork.artworkAt(ROW_ART_PX),
                     contentDescription = null,
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),

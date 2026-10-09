@@ -96,11 +96,14 @@ fun rememberArtworkPalette(
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
 
     // The two swatches everything else is derived from, or null until read.
-    var seed by remember(imageUrl) { mutableStateOf(imageUrl?.let(seedCache::get)) }
+    // Keyed on artPx too, matching the LaunchedEffect below: the same URL at
+    // a different size is a different fetch, and a stale seed would tint the
+    // surface with the wrong rendition's colours.
+    var seed by remember(imageUrl, artPx) { mutableStateOf(imageUrl?.let(seedCache::get)) }
     // Whether the colours were there from the first frame. If they were, there
     // is nothing to crossfade *from* and animating would only put a delay in
     // front of a surface that could already be right.
-    val knownUpFront = remember(imageUrl) { seed != null }
+    val knownUpFront = remember(imageUrl, artPx) { seed != null }
 
     LaunchedEffect(imageUrl, artPx) {
         if (imageUrl == null || seed != null) return@LaunchedEffect
