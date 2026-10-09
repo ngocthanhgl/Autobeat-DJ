@@ -3,6 +3,8 @@ package com.music.autobeat.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.media.audiofx.AudioEffect
+import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -81,6 +83,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -132,10 +135,12 @@ import com.music.autobeat.ui.performance.resolvePerformanceRefreshRate
 import com.music.autobeat.ui.performance.supportedPerformanceRefreshRates
 import com.music.autobeat.data.model.Account
 import com.music.autobeat.data.LocalMediaRepository
+import com.music.autobeat.data.scrobbling.LastFM
 import com.music.autobeat.data.listentogether.ListenTogether
 import com.music.autobeat.data.settings.AppSettings
 import com.music.autobeat.data.settings.OutputPcmMode
 import com.music.autobeat.playback.AudioOutputStatus
+import com.music.autobeat.data.settings.AutomixPerformanceMode
 import com.music.autobeat.R
 import com.music.autobeat.data.sources.DeviceCodecs
 import com.music.autobeat.data.settings.AudioQuality
@@ -187,6 +192,7 @@ fun SettingsScreen(
     val mixset by AppSettings.mixsetModeEnabled.collectAsStateWithLifecycle()
     val djIntensity by AppSettings.djIntensity.collectAsStateWithLifecycle()
     val loudnessNormalization by AppSettings.loudnessNormalizationEnabled.collectAsStateWithLifecycle()
+    val automixPerformance by AppSettings.automixPerformanceMode.collectAsStateWithLifecycle()
     val skipSilence by AppSettings.skipSilence.collectAsStateWithLifecycle()
     val dolbyAtmos by AppSettings.dolbyAtmos.collectAsStateWithLifecycle()
     // A property of the hardware, so it is read once rather than remembered
@@ -223,6 +229,7 @@ fun SettingsScreen(
     val preferMusicOnly by AppSettings.preferMusicOnly.collectAsStateWithLifecycle()
     val filterNonMusicAudio by AppSettings.filterNonMusicAudio.collectAsStateWithLifecycle()
     val localMusicFolderUri by AppSettings.localMusicFolderUri.collectAsStateWithLifecycle()
+    val highPerformanceMode by AppSettings.highPerformanceMode.collectAsStateWithLifecycle()
     val performanceRefreshRate by AppSettings.performanceRefreshRate.collectAsStateWithLifecycle()
     val currentDisplay = LocalView.current.display
     val supportedRefreshRates = remember(currentDisplay) {
@@ -238,6 +245,18 @@ fun SettingsScreen(
         }
     }
 
+    // Scrobbling states
+    val lastfmEnabled by AppSettings.lastfmEnabled.collectAsStateWithLifecycle()
+    val lastfmUsername by AppSettings.lastfmUsername.collectAsStateWithLifecycle()
+    val lastfmSessionKey by AppSettings.lastfmSessionKey.collectAsStateWithLifecycle()
+    val lastfmScrobbleEnabled by AppSettings.lastfmScrobbleEnabled.collectAsStateWithLifecycle()
+    val lastfmNowPlayingEnabled by AppSettings.lastfmNowPlaying.collectAsStateWithLifecycle()
+    val scrobbleMinDuration by AppSettings.scrobbleMinDuration.collectAsStateWithLifecycle()
+    val scrobbleDelayPercent by AppSettings.scrobbleDelayPercent.collectAsStateWithLifecycle()
+    val scrobbleDelaySeconds by AppSettings.scrobbleDelaySeconds.collectAsStateWithLifecycle()
+    val listenBrainzEnabled by AppSettings.listenBrainzEnabled.collectAsStateWithLifecycle()
+    val listenBrainzToken by AppSettings.listenBrainzToken.collectAsStateWithLifecycle()
+
     val replayGenres by AppSettings.replayGenres.collectAsStateWithLifecycle()
 
     // Read here so the row can say "In a party · ABC123" rather than making
@@ -249,6 +268,7 @@ fun SettingsScreen(
     var searchQuery by remember { mutableStateOf("") }
     var picking by remember { mutableStateOf<QualityTarget?>(null) }
     var pickingDownloadQuality by remember { mutableStateOf(false) }
+    var pickingAutomixPerformance by remember { mutableStateOf(false) }
     // What the last export or import did, shown on the row that did it rather
     // than as a toast: a backup is the one action here whose outcome nobody can
     // check by looking at the app afterwards. Held per direction, or an import's
@@ -256,8 +276,15 @@ fun SettingsScreen(
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var importStatus by remember { mutableStateOf<String?>(null) }
     var confirmImport by remember { mutableStateOf(false) }
+    var showPerformanceWarning by remember { mutableStateOf(false) }
+    var showPerformanceConfirmation by remember { mutableStateOf(false) }
     val backupScope = rememberCoroutineScope()
 
+    val batterySettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        showPerformanceConfirmation = true
+    }
     val localMusicFolderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { folder ->
@@ -308,6 +335,10 @@ fun SettingsScreen(
             )
         }
     }
+    var showListenBrainzTokenDialog by remember { mutableStateOf(false) }
+    var showLastfmLoginDialog by remember { mutableStateOf(false) }
+    val scrobbleScope = rememberCoroutineScope()
+
     val version = remember(context) {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -387,87 +418,6 @@ fun SettingsScreen(
             }
         }
 
-        // First for a DJ: the whole reason this app exists is the mix, so the
-        // mix switch, its intensity and the two glues that keep a blend clean
-        // sit above everything else.
-        SearchableSettingsGroup(search, header = stringResource(R.string.dj_mix)) {
-            // Hidden in Autobeat 1.0: Automix is slaved to DJ Mode + performance = PERFORMANCE.
-            val djModeTitle = stringResource(R.string.mixset)
-            row(djModeTitle, "dj", "mixset", "mix") {
-                SettingsRow(
-                    icon = Icons.Rounded.MusicNote,
-                    title = djModeTitle,
-                    subtitle = stringResource(R.string.mixset_subtitle),
-                    trailing = {
-                        GlassSwitch(
-                            checked = mixset,
-                            onCheckedChange = { checked ->
-                                if (checked && outputPcmMode == OutputPcmMode.FLOAT_32) {
-                                    Toast.makeText(context, context.getString(R.string.dj_mode_pcm_locked), Toast.LENGTH_SHORT).show()
-                                }
-                                AppSettings.setMixsetModeEnabled(checked)
-                            },
-                        )
-                    },
-                    onClick = {
-                        if (!mixset && outputPcmMode == OutputPcmMode.FLOAT_32) {
-                            Toast.makeText(context, context.getString(R.string.dj_mode_pcm_locked), Toast.LENGTH_SHORT).show()
-                        }
-                        AppSettings.setMixsetModeEnabled(!mixset)
-                    },
-                )
-            }
-            row(stringResource(R.string.dj_intensity), "intensity", "energy", "booth") {
-                SettingsRow(
-                    icon = Icons.Rounded.AutoAwesome,
-                    title = stringResource(R.string.dj_intensity),
-                    subtitle = stringResource(R.string.dj_intensity_subtitle),
-                )
-                SegmentedControl(
-                    options = DjIntensity.entries.map { it.localizedLabel() },
-                    selectedIndex = DjIntensity.entries.indexOf(djIntensity),
-                    onSelect = { AppSettings.setDjIntensity(DjIntensity.entries[it]) },
-                    modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
-                    enabled = mixset,
-                )
-            }
-            // Lives with the mix, not with Playback: it is the level match
-            // between two tracks sharing one fader, which is exactly what a
-            // blend stands or falls on.
-            val loudnessTitle = stringResource(R.string.loudness_normalization)
-            row(loudnessTitle, "normalize", "volume", "loudness", "lufs") {
-                SettingsRow(
-                    icon = Icons.Rounded.VolumeUp,
-                    title = loudnessTitle,
-                    subtitle = stringResource(R.string.loudness_normalization_subtitle),
-                    trailing = {
-                        GlassSwitch(
-                            checked = loudnessNormalization,
-                            onCheckedChange = AppSettings::setLoudnessNormalizationEnabled,
-                        )
-                    },
-                    onClick = { AppSettings.setLoudnessNormalizationEnabled(!loudnessNormalization) },
-                )
-            }
-            // Same story: a silence the mix has to jump is a transition the DJ
-            // did not choose, so the switch sits where transitions are tuned.
-            val skipSilenceTitle = stringResource(R.string.skip_silence)
-            row(skipSilenceTitle, "silence") {
-                SettingsRow(
-                    icon = Icons.AutoMirrored.Rounded.VolumeOff,
-                    title = skipSilenceTitle,
-                    subtitle = stringResource(R.string.skip_silence_subtitle),
-                    trailing = {
-                        GlassSwitch(
-                            checked = skipSilence,
-                            onCheckedChange = AppSettings::setSkipSilence,
-                        )
-                    },
-                    onClick = { AppSettings.setSkipSilence(!skipSilence) },
-                )
-            }
-        }
-
         // The row that used to sit at the top of this group was called
         // "Lossless / HQ Audio" and toggled `SourceRegistry.setModuleEnabled` —
         // it switched the *module source* on and off, not lossless. Sources
@@ -536,23 +486,6 @@ fun SettingsScreen(
                         )
                     },
                     onClick = { AppSettings.setDolbyAtmos(!dolbyAtmos) },
-                )
-            }
-            // Sits with Dolby Atmos rather than with Playback: both answer how
-            // the device renders space, one over a decoder and one over phones.
-            val spatialAudioTitle = stringResource(R.string.spatial_audio)
-            row(spatialAudioTitle, "surround", "3d") {
-                SettingsRow(
-                    icon = Icons.Rounded.SurroundSound,
-                    title = spatialAudioTitle,
-                    subtitle = stringResource(R.string.spatial_audio_subtitle),
-                    trailing = {
-                        GlassSwitch(
-                            checked = spatialAudio,
-                            onCheckedChange = AppSettings::setSpatialAudio,
-                        )
-                    },
-                    onClick = { AppSettings.setSpatialAudio(!spatialAudio) },
                 )
             }
         }
@@ -631,8 +564,91 @@ fun SettingsScreen(
                     )
                 }
             }
-            // Moved to the DJ Mix group at the top: the mix switch, its
-            // intensity and the two glues that keep a blend clean.
+            // Hidden in Autobeat 1.0: Automix is slaved to DJ Mode + performance = PERFORMANCE.
+            val djModeTitle = stringResource(R.string.mixset)
+            row(djModeTitle, "dj", "mixset", "mix") {
+                SettingsRow(
+                    icon = Icons.Rounded.MusicNote,
+                    title = djModeTitle,
+                    subtitle = stringResource(R.string.mixset_subtitle),
+                    trailing = {
+                        GlassSwitch(
+                            checked = mixset,
+                            onCheckedChange = { checked ->
+                                if (checked && outputPcmMode == OutputPcmMode.FLOAT_32) {
+                                    Toast.makeText(context, context.getString(R.string.dj_mode_pcm_locked), Toast.LENGTH_SHORT).show()
+                                }
+                                AppSettings.setMixsetModeEnabled(checked)
+                            },
+                        )
+                    },
+                    onClick = {
+                        if (!mixset && outputPcmMode == OutputPcmMode.FLOAT_32) {
+                            Toast.makeText(context, context.getString(R.string.dj_mode_pcm_locked), Toast.LENGTH_SHORT).show()
+                        }
+                        AppSettings.setMixsetModeEnabled(!mixset)
+                    },
+                )
+            }
+            row(stringResource(R.string.dj_intensity), "intensity", "energy", "booth") {
+                SettingsRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = stringResource(R.string.dj_intensity),
+                    subtitle = stringResource(R.string.dj_intensity_subtitle),
+                )
+                SegmentedControl(
+                    options = DjIntensity.entries.map { it.localizedLabel() },
+                    selectedIndex = DjIntensity.entries.indexOf(djIntensity),
+                    onSelect = { AppSettings.setDjIntensity(DjIntensity.entries[it]) },
+                    modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
+                    enabled = mixset,
+                )
+            }
+            val loudnessTitle = stringResource(R.string.loudness_normalization)
+            row(loudnessTitle, "normalize", "volume", "loudness", "lufs") {
+                SettingsRow(
+                    icon = Icons.Rounded.VolumeUp,
+                    title = loudnessTitle,
+                    subtitle = stringResource(R.string.loudness_normalization_subtitle),
+                    trailing = {
+                        GlassSwitch(
+                            checked = loudnessNormalization,
+                            onCheckedChange = AppSettings::setLoudnessNormalizationEnabled,
+                        )
+                    },
+                    onClick = { AppSettings.setLoudnessNormalizationEnabled(!loudnessNormalization) },
+                )
+            }
+            val skipSilenceTitle = stringResource(R.string.skip_silence)
+            row(skipSilenceTitle, "silence") {
+                SettingsRow(
+                    icon = Icons.AutoMirrored.Rounded.VolumeOff,
+                    title = skipSilenceTitle,
+                    subtitle = stringResource(R.string.skip_silence_subtitle),
+                    trailing = {
+                        GlassSwitch(
+                            checked = skipSilence,
+                            onCheckedChange = AppSettings::setSkipSilence,
+                        )
+                    },
+                    onClick = { AppSettings.setSkipSilence(!skipSilence) },
+                )
+            }
+            val spatialAudioTitle = stringResource(R.string.spatial_audio)
+            row(spatialAudioTitle, "surround", "3d") {
+                SettingsRow(
+                    icon = Icons.Rounded.SurroundSound,
+                    title = spatialAudioTitle,
+                    subtitle = stringResource(R.string.spatial_audio_subtitle),
+                    trailing = {
+                        GlassSwitch(
+                            checked = spatialAudio,
+                            onCheckedChange = AppSettings::setSpatialAudio,
+                        )
+                    },
+                    onClick = { AppSettings.setSpatialAudio(!spatialAudio) },
+                )
+            }
             // The system panel is not listed here as well. A device with a
             // Dolby or Dirac panel has something Autobeat cannot reproduce and
             // keeps its row — but one level in, at the foot of the equaliser
@@ -1078,9 +1094,9 @@ fun SettingsScreen(
                     onClick = { AppSettings.setHideVolumeBar(!hideVolumeBar) },
                 )
             }
-            // One row, not one group: the language is chosen once and then
-            // never thought about again, which is no reason to spend a whole
-            // header on it.
+        }
+
+        SearchableSettingsGroup(search, header = stringResource(R.string.language)) {
             val appLanguageTitle = stringResource(R.string.app_language)
             row(appLanguageTitle, "locale", "translate") {
                 val selectedLanguage = AppCompatDelegate.getApplicationLocales().get(0)?.language
@@ -1092,8 +1108,9 @@ fun SettingsScreen(
                     onClick = onAppLanguage,
                 )
             }
-            // Same: a single debug switch reads as clutter with a header of
-            // its own, and nobody hunting bitrate checks "Advanced" first.
+        }
+
+        SearchableSettingsGroup(search, header = stringResource(R.string.advanced_options)) {
             val showNerdStatsTitle = stringResource(R.string.show_nerd_stats)
             row(showNerdStatsTitle, "debug", "bitrate", "codec") {
                 SettingsRow(
@@ -1201,6 +1218,25 @@ fun SettingsScreen(
         }
     }
 
+    if (pickingAutomixPerformance) {
+        val automixSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { pickingAutomixPerformance = false },
+            sheetState = automixSheetState,
+            containerColor = MaterialTheme.colorScheme.background,
+        ) {
+            Box(Modifier.guardSheetFromContentTouches(automixSheetState)) {
+            AutomixPerformanceSheet(
+                selected = automixPerformance,
+                onSelect = { mode ->
+                    AppSettings.setAutomixPerformanceMode(mode)
+                    pickingAutomixPerformance = false
+                },
+            )
+            }
+        }
+    }
+
     // Asked before the picker opens rather than after a file is chosen: the
     // thing being confirmed is that this device's own history is about to be
     // thrown away, and that is true whichever file gets picked.
@@ -1221,6 +1257,165 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { confirmImport = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    if (showPerformanceWarning) {
+        AlertDialog(
+            onDismissRequest = { showPerformanceWarning = false },
+            title = { Text(stringResource(R.string.high_performance_before_enabling)) },
+            text = { Text(stringResource(R.string.high_performance_battery_warning)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showPerformanceWarning = false
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                        val settingsIntent = intent.takeIf {
+                            it.resolveActivity(context.packageManager) != null
+                        } ?: Intent(Settings.ACTION_SETTINGS)
+                        batterySettingsLauncher.launch(settingsIntent)
+                    },
+                ) {
+                    Text(stringResource(R.string.open_battery_settings))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPerformanceWarning = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    if (showPerformanceConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showPerformanceConfirmation = false },
+            title = { Text(stringResource(R.string.enable_high_performance_title)) },
+            text = { Text(stringResource(R.string.enable_high_performance_confirmation)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showPerformanceConfirmation = false
+                        AppSettings.setHighPerformanceMode(true)
+                    },
+                ) {
+                    Text(stringResource(R.string.enable))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPerformanceConfirmation = false }) {
+                    Text(stringResource(R.string.not_yet))
+                }
+            },
+        )
+    }
+
+    if (showListenBrainzTokenDialog) {
+        var tokenInput by remember { mutableStateOf(listenBrainzToken) }
+        AlertDialog(
+            onDismissRequest = { showListenBrainzTokenDialog = false },
+            title = { Text(stringResource(R.string.listenbrainz_token)) },
+            text = {
+                OutlinedTextField(
+                    value = tokenInput,
+                    onValueChange = { tokenInput = it },
+                    label = { Text(stringResource(R.string.api_token)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    AppSettings.setListenBrainzToken(tokenInput.trim())
+                    showListenBrainzTokenDialog = false
+                }) {
+                    Text(stringResource(R.string.save))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showListenBrainzTokenDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    if (showLastfmLoginDialog) {
+        var usernameInput by remember { mutableStateOf("") }
+        var passwordInput by remember { mutableStateOf("") }
+        var lastfmError by remember { mutableStateOf<String?>(null) }
+        var lastfmLoading by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { if (!lastfmLoading) showLastfmLoginDialog = false },
+            title = { Text(stringResource(R.string.lastfm_login)) },
+            text = {
+                Column {
+                    if (lastfmError != null) {
+                        Text(
+                            text = lastfmError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                    OutlinedTextField(
+                        value = usernameInput,
+                        onValueChange = { usernameInput = it },
+                        label = { Text(stringResource(R.string.username)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text(stringResource(R.string.password)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        lastfmLoading = true
+                        lastfmError = null
+                        scrobbleScope.launch {
+                            try {
+                                // Use the credentials supplied for this build.
+                                LastFM.initialize(
+                                    apiKey = AppSettings.lastfmApiKey.value,
+                                    secret = AppSettings.lastfmSecret.value,
+                                )
+                                LastFM.getMobileSession(usernameInput.trim(), passwordInput)
+                                    .onSuccess { auth ->
+                                        AppSettings.setLastfmSessionKey(auth.session.key)
+                                        AppSettings.setLastfmUsername(auth.session.name)
+                                        AppSettings.setLastfmEnabled(true)
+                                        showLastfmLoginDialog = false
+                                    }
+                                    .onFailure { e ->
+                                        lastfmError = e.message ?: context.getString(R.string.login_failed)
+                                    }
+                            } catch (e: Exception) {
+                                lastfmError = e.message ?: context.getString(R.string.login_failed)
+                            } finally {
+                                lastfmLoading = false
+                            }
+                        }
+                    },
+                    enabled = !lastfmLoading && usernameInput.isNotBlank() && passwordInput.isNotBlank(),
+                ) {
+                    Text(stringResource(if (lastfmLoading) R.string.signing_in else R.string.sign_in))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLastfmLoginDialog = false }, enabled = !lastfmLoading) {
                     Text(stringResource(R.string.cancel))
                 }
             },
@@ -1281,6 +1476,15 @@ private fun ThemeMode.localizedLabel(): String = stringResource(
         ThemeMode.SYSTEM -> R.string.system
         ThemeMode.LIGHT -> R.string.light
         ThemeMode.DARK -> R.string.dark
+    },
+)
+
+@Composable
+private fun AutomixPerformanceMode.localizedLabel(): String = stringResource(
+    when (this) {
+        AutomixPerformanceMode.EFFICIENT -> R.string.automix_mode_efficient
+        AutomixPerformanceMode.BALANCED -> R.string.automix_mode_balanced
+        AutomixPerformanceMode.PERFORMANCE -> R.string.automix_mode_performance
     },
 )
 
@@ -1445,6 +1649,83 @@ private fun QualitySheet(
                     )
                     Text(
                         text = stringResource(R.string.quality_hourly, quality.detail, quality.hourly),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (chosen) {
+                    Spacer(Modifier.width(12.dp))
+                    Icon(
+                        Icons.Rounded.Check,
+                        contentDescription = stringResource(R.string.selected),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** CPU budget picker for the background models that prepare Automix. */
+@Composable
+private fun AutomixPerformanceSheet(
+    selected: AutomixPerformanceMode,
+    onSelect: (AutomixPerformanceMode) -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Row(
+            modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Tune,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(
+                    text = stringResource(R.string.automix_performance),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    text = stringResource(R.string.automix_performance_warning),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline)
+        AutomixPerformanceMode.entries.forEach { mode ->
+            val chosen = mode == selected
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSelect(mode)
+                    }
+                    .padding(horizontal = 22.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = mode.localizedLabel(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        text = stringResource(
+                            when (mode) {
+                                AutomixPerformanceMode.EFFICIENT -> R.string.automix_mode_efficient_subtitle
+                                AutomixPerformanceMode.BALANCED -> R.string.automix_mode_balanced_subtitle
+                                AutomixPerformanceMode.PERFORMANCE -> R.string.automix_mode_performance_subtitle
+                            },
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

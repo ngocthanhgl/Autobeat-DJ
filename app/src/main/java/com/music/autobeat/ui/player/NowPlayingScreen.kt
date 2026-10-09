@@ -288,12 +288,10 @@ import kotlin.random.Random
 /**
  * Comfortably over the sleeve's drawn size on a phone, without wasting bytes.
  *
- * Deliberately a rung below [PLAYER_ART_PX]: the player holds several of these
- * at once (current, held previous, prefetches) plus per-capture frames, and at
- * 1200px each is ~5.8MB — 800px is ~2.6MB and still past what the sleeve and
- * banner draw. See [PLAYER_ART_PX].
+ * A rung on the app-wide ladder rather than a number of the player's own, so a
+ * large home-screen widget asks for the same copy — see [PLAYER_ART_PX].
  */
-private const val ART_PX = 800
+private const val ART_PX = PLAYER_ART_PX
 
 /**
  * How many further goes a cover that failed to load gets.
@@ -1324,17 +1322,10 @@ fun NowPlayingScreen(
     var romanizationJob by remember(song.videoId, translationLanguage, lyrics) {
         mutableStateOf<Job?>(null)
     }
-    // The remembers above reset to null on a key change BEFORE onDispose runs,
-    // so reading [translationJob] in the dispose block would see the new null
-    // and leak the in-flight request. Hoist the jobs into the keys instead:
-    // dispose then cancels whatever was current when the effect started —
-    // including a job launched by a tap after the track's effect began.
-    val liveTranslation = translationJob
-    val liveRomanization = romanizationJob
-    DisposableEffect(song.videoId, translationLanguage, lyrics, liveTranslation, liveRomanization) {
+    DisposableEffect(song.videoId, translationLanguage, lyrics) {
         onDispose {
-            liveTranslation?.cancel()
-            liveRomanization?.cancel()
+            translationJob?.cancel()
+            romanizationJob?.cancel()
         }
     }
     val displayedLyrics = when (lyricsDisplayMode) {
@@ -1921,20 +1912,13 @@ fun NowPlayingScreen(
         }
     }
     LaunchedEffect(artLoaded, artUrl) {
-        if (!artLoaded || prevArtRequest == null) return@LaunchedEffect
-        // Held while a panel transition is in flight: clearing the old
-        // cover mid-flight flashes the sleeve behind the banner. Wait for
-        // the flight to land instead of giving up on the first pass — but
-        // not forever, or a stuck transition pins a full-size bitmap until
-        // the next track change.
-        repeat(10) {
+        if (artLoaded && prevArtRequest != null) {
             delay(300)
-            if (p <= 0f || p >= 1f) {
-                prevArtRequest = null
-                return@LaunchedEffect
-            }
+            // held while a panel transition is in flight: clearing the old
+            // cover mid-flight flashes the sleeve behind the banner.
+            if (p > 0f && p < 1f) return@LaunchedEffect
+            prevArtRequest = null
         }
-        prevArtRequest = null
     }
     LaunchedEffect(artUrl, artFailed) {
         // A track with no artwork at all fails immediately and would fail
@@ -2502,21 +2486,7 @@ fun NowPlayingScreen(
                     portraitRevealBounds = playerBounds,
                     presentationAlpha = if (canvasFirstPortrait) (1f - 2f * p).coerceIn(0f, 1f) else 1f,
                     onRenderedChanged = { canvasRendered = it },
-                    onFrameCaptured = { frame ->
-                        // A steady shot sends near-identical frames every few
-                        // seconds; publishing each rebuilds the mesh, re-runs
-                        // the palette and re-blurs the whole screen for no
-                        // visible change. Drop those, recycle the spare, and
-                        // retire the replaced frame instead of leaving it for
-                        // the finalizer.
-                        val old = canvasFrame
-                        if (!canvasFrameChanged(old, frame)) {
-                            frame.recycle()
-                        } else {
-                            canvasFrame = frame
-                            if (old != null && !old.isRecycled) old.recycle()
-                        }
-                    },
+                    onFrameCaptured = { canvasFrame = it },
                     refreshFrameEveryMs = meshRefreshMs,
                     onCoverChanged = { canvasCover.floatValue = it },
                     bottomFade = if (canvasFirstPortrait) canvasFirstFadeFraction else HERO_FADE_FRACTION,
@@ -3126,15 +3096,7 @@ fun NowPlayingScreen(
                                     canvas = clip,
                                     isPlaying = isPlaying,
                                     onRenderedChanged = { canvasRendered = it },
-                                    onFrameCaptured = { frame ->
-                                        val old = canvasFrame
-                                        if (!canvasFrameChanged(old, frame)) {
-                                            frame.recycle()
-                                        } else {
-                                            canvasFrame = frame
-                                            if (old != null && !old.isRecycled) old.recycle()
-                                        }
-                                    },
+                                    onFrameCaptured = { canvasFrame = it },
                                     refreshFrameEveryMs = meshRefreshMs,
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -3292,10 +3254,7 @@ fun NowPlayingScreen(
                     Column(Modifier.weight(1f)) {
                         // Shrinks as the header collapses, so the queue's
                         // heading doesn't have to compete with it.
-                        // Title shouts, artist answers: 22 Bold against 15
-                        // regular is the top-tier credit hierarchy.
-                        val titleSize = lerp(22.sp, 16.sp, p)
-                        val artistSize = lerp(15.sp, 13.sp, p)
+                        val titleSize = lerp(20.sp, 16.sp, p)
                         // Only the title's own overflow gates the artist's stagger
                         // below — an artist line that's long on its own has no
                         // reason to wait on a title that already fits.
@@ -3309,7 +3268,6 @@ fun NowPlayingScreen(
                             text = song.title,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontSize = titleSize,
-                                fontWeight = FontWeight.Bold,
                             ),
                             color = Color.White,
                             enabled = scrolls,
@@ -3327,7 +3285,7 @@ fun NowPlayingScreen(
                             text = song.artist,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.W500,
-                                fontSize = artistSize,
+                                fontSize = titleSize,
                             ),
                             color = Color.White.copy(alpha = 0.55f),
                             enabled = scrolls,
@@ -3676,8 +3634,7 @@ fun NowPlayingScreen(
                         color = Color.White.copy(alpha = 0.55f),
                     )
                     Text(
-                        // Total, not negative-remaining: the standard idiom.
-                        text = formatTime(durationMs),
+                        text = "-" + formatTime(durationMs - (shown * durationMs).toLong()),
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White.copy(alpha = 0.55f),
                     )
@@ -3738,7 +3695,6 @@ fun NowPlayingScreen(
                     icon = R.drawable.ic_player_previous,
                     contentDescription = stringResource(R.string.widget_previous),
                     size = 48.dp,
-                    touchSize = 64.dp,
                     onClick = onPrevious,
                     // Lit whenever back has something to do — either a track to
                     // step to, or enough elapsed for it to restart this one.
@@ -3771,7 +3727,6 @@ fun NowPlayingScreen(
                     icon = R.drawable.ic_player_next,
                     contentDescription = stringResource(R.string.widget_next),
                     size = 48.dp,
-                    touchSize = 64.dp,
                     onClick = onNext,
                     enabled = hasNext,
                     haptic = Haptic.SkipNext,
@@ -4284,7 +4239,6 @@ private fun WidePlayerControls(
                     icon = R.drawable.ic_player_previous,
                     contentDescription = stringResource(R.string.widget_previous),
                     size = 48.dp,
-                    touchSize = 64.dp,
                     onClick = onPrevious,
                     enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
                     haptic = Haptic.SkipPrevious,
@@ -4313,7 +4267,6 @@ private fun WidePlayerControls(
                     icon = R.drawable.ic_player_next,
                     contentDescription = stringResource(R.string.widget_next),
                     size = 48.dp,
-                    touchSize = 64.dp,
                     onClick = onNext,
                     enabled = hasNext,
                     haptic = Haptic.SkipNext,
@@ -4783,10 +4736,6 @@ private fun WideCredits(
  * whole line would recompose sixty times a second.
  */
 @Composable
-/** A jump bigger than this between the polled report and the clock's own advance
- * is a seek or a large correction, not jitter — resync straight to it. */
-private const val LYRIC_RESYNC_MS = 1000L
-
 private fun rememberLyricClock(positionMs: Long, isPlaying: Boolean): MutableLongState {
     val clock = remember { mutableLongStateOf(positionMs) }
     // Gated on the app being on screen. The loop asks for a frame, writes a
@@ -4795,29 +4744,19 @@ private fun rememberLyricClock(positionMs: Long, isPlaying: Boolean): MutableLon
     // the right trade for a lyric being read and the wrong one for a phone in a
     // pocket, and the composition alone cannot tell the two apart.
     //
-    // Resuming needs no catch-up: the loop below reads the latest report
-    // through [latestPos] every frame, so coming back reconciles without a
-    // restart. [positionMs] is deliberately NOT a key — it is rewritten twice
-    // a second by the poll loop, and keying on it tore this 60fps callback
-    // down and recreated it twice a second for the whole session.
+    // Resuming needs no catch-up: [positionMs] is a key, so coming back
+    // restarts the effect and reconciles the latest playback report before
+    // requesting another frame.
     val foreground = rememberIsForeground()
-    val latestPos by rememberUpdatedState(positionMs)
-    LaunchedEffect(isPlaying, foreground) {
-        clock.longValue = reconcileLyricPosition(clock.longValue, latestPos)
+    LaunchedEffect(positionMs, isPlaying, foreground) {
+        clock.longValue = reconcileLyricPosition(clock.longValue, positionMs)
         if (!isPlaying || !foreground) return@LaunchedEffect
-        val base = latestPos
         val firstFrame = withFrameMillis { it }
         while (true) {
             withFrameMillis { frame ->
-                val now = latestPos
-                val expected = base + frame - firstFrame
-                // A seek or a large correction jumps straight there; ordinary
-                // jitter keeps the monotonic advance, as before.
-                clock.longValue = if (abs(now - expected) > LYRIC_RESYNC_MS) {
-                    reconcileLyricPosition(clock.longValue, now)
-                } else {
-                    maxOf(clock.longValue, expected)
-                }
+                // Advance from the authoritative report, not the held display value:
+                // otherwise each small correction would accumulate permanent drift.
+                clock.longValue = maxOf(clock.longValue, positionMs + frame - firstFrame)
             }
         }
     }
@@ -5694,10 +5633,6 @@ private fun LyricsPanel(
     val viewportHeight by remember(listState) {
         derivedStateOf { listState.layoutInfo.viewportSize.height }
     }
-    // The sung line sits a third of the way down, not at the top edge:
-    // context above it, room below. Zero until the first layout pass.
-    val centerOffset = (viewportHeight * 0.30f).toInt()
-    val followScope = rememberCoroutineScope()
     val keepScroll = remember(listState) { keepScrollInList(listState) }
     var browsing by remember { mutableStateOf(false) }
     val onBottomHalfTap: () -> Unit = {
@@ -5818,7 +5753,7 @@ private fun LyricsPanel(
             val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusLine }
             when {
                 !placed -> {
-                    listState.scrollToItem(focusLine, scrollOffset = centerOffset)
+                    listState.scrollToItem(focusLine, scrollOffset = 0)
                     placed = true
                 }
                 // Already on screen, which is the ordinary case of handing over
@@ -5840,7 +5775,7 @@ private fun LyricsPanel(
                 // Somewhere off screen — after a seek, or a long instrumental
                 // scrolled past. How far is not known without laying the rows
                 // out, so this hands back to the list's own staged scroll.
-                else -> listState.animateScrollToItem(focusLine, scrollOffset = centerOffset)
+                else -> listState.animateScrollToItem(focusLine, scrollOffset = 0)
             }
         }
     }
@@ -5863,13 +5798,9 @@ private fun LyricsPanel(
         return
     }
 
-    // A Box so the follow pill can float over the list's foot without
-    // costing the panel a row of layout.
-    Box(modifier) {
     LazyColumn(
         state = listState,
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = modifier
             .bleedHorizontally(PLAYER_GUTTER)
             .nestedScroll(controlsOnScroll)
             .nestedScroll(keepScroll)
@@ -5881,7 +5812,7 @@ private fun LyricsPanel(
         // width further apart and further in than they used to.
         contentPadding = PaddingValues(
             top = 40.dp - GLOW_ROOM,
-            bottom = with(LocalDensity.current) { viewportHeight.toDp() } * 0.55f,
+            bottom = with(LocalDensity.current) { viewportHeight.toDp() } * 0.8f,
             start = PLAYER_GUTTER - GLOW_ROOM,
             end = PLAYER_GUTTER - GLOW_ROOM,
         ),
@@ -6151,16 +6082,6 @@ private fun LyricsPanel(
                     modifier = shape,
                 ) { renderedLine ->
                     Column {
-                        // A timestamp on the line being sung: the rows are
-                        // tap-to-seek, and this is what says so.
-                        if (isActive && isSynced) {
-                            Text(
-                                text = formatTime(line.timeMs),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(start = GLOW_ROOM, bottom = 2.dp),
-                            )
-                        }
                         PanelVoice(
                             line = renderedLine,
                             clock = clock,
@@ -6210,34 +6131,6 @@ private fun LyricsPanel(
                         }
                     }
                 }
-            }
-        }
-        if (browsing && !activeOnScreen) {
-            // A visible way back to the song. The resume used to be two
-            // invisible timers, and a reader who had scrolled on had no idea
-            // how to get back except waiting for them.
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 24.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.follow),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = Color.White,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.14f))
-                        .clickable {
-                            browsing = false
-                            followScope.launch {
-                                if (focusLine in lines.indices) {
-                                    listState.animateScrollToItem(focusLine, centerOffset)
-                                }
-                            }
-                        }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                )
             }
         }
     }
@@ -7474,16 +7367,6 @@ private fun InlineQueue(
                 items = manualRows,
                 key = { index, _ -> manualKeys[index] },
             ) { index, song ->
-                // A section head over the first row still to come: history
-                // above, the future below. Only when both exist.
-                if (index == firstMovable && firstMovable > 0 && firstMovable < manualRows.size) {
-                    Text(
-                        text = stringResource(R.string.up_next),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = Color.White.copy(alpha = 0.55f),
-                        modifier = Modifier.padding(start = 34.dp, top = 12.dp, bottom = 4.dp),
-                    )
-                }
                 val key = manualKeys[index]
                 val dragging = manualDrag.draggedKey == key
                 InlineQueueRow(
@@ -7994,7 +7877,7 @@ private fun InlineQueueRow(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(if (dragging || isCurrent) Color.White.copy(alpha = 0.06f) else Color.Transparent)
+            .background(if (dragging) Color.White.copy(alpha = 0.06f) else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -8048,17 +7931,6 @@ private fun InlineQueueRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        song.durationText?.let { duration ->
-            // Trailing duration, the Up Next idiom: glanceable length
-            // without opening the row.
-            Text(
-                text = duration,
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.55f),
-                maxLines = 1,
-            )
-            Spacer(Modifier.width(10.dp))
-        }
         if (isCurrent) {
             Icon(
                 Icons.Rounded.GraphicEq,
@@ -8070,7 +7942,7 @@ private fun InlineQueueRow(
         }
         Box(
             modifier = Modifier
-                .size(48.dp)
+                .size(28.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onRemove),
             contentAlignment = Alignment.Center,
@@ -8079,7 +7951,7 @@ private fun InlineQueueRow(
                 Icons.Rounded.Close,
                 contentDescription = stringResource(R.string.remove_from_queue),
                 tint = Color.White.copy(alpha = 0.55f),
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(16.dp),
             )
         }
     }
