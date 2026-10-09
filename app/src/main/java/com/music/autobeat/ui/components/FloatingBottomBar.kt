@@ -346,7 +346,7 @@ private fun BottomBarItem(
         } else {
             unselectedTint ?: MaterialTheme.colorScheme.onSurfaceVariant
         },
-        animationSpec = MotionTokens.FadeMed,
+        animationSpec = MotionTokens.FadeMedColor,
         label = "tabTint",
     )
 

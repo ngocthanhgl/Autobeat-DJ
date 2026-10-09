@@ -224,6 +224,9 @@ import coil3.request.allowHardware
 import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.music.autobeat.ui.theme.MatchClash
+import com.music.autobeat.ui.theme.MatchDrifting
+import com.music.autobeat.ui.theme.MatchHarmonic
 import com.music.autobeat.ui.theme.MotionTokens
 import com.music.autobeat.ui.theme.SystemBarIcons
 import com.music.autobeat.ui.rememberIsForeground

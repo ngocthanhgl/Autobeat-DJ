@@ -356,7 +356,7 @@ private fun ArtworkPageActions(
             // its new width in a single frame.
             .animateContentSize(
                 // Restrained bounce: the pill breathes as actions come and go.
-                animationSpec = MotionTokens.SettleSpring,
+                animationSpec = MotionTokens.SettleSpringIntSize,
             )
             // One 44dp profile target with no inset is a true 44x44 circle,
             // matching the logo and back ends. Once another action exists,

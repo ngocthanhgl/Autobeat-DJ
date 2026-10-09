@@ -40,7 +40,6 @@ import coil3.toBitmap
 import com.music.autobeat.data.model.PLAYER_ART_PX
 import com.music.autobeat.data.model.artworkAt
 import com.music.autobeat.data.settings.AppSettings
-import com.music.autobeat.ui.theme.MotionTokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
