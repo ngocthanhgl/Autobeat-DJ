@@ -84,6 +84,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.offset
@@ -2559,6 +2560,10 @@ fun NowPlayingScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                // Cutout (camera hole) sits inside the status bar on most phones
+                // but drops below it on some — clear it explicitly so the drag
+                // strip and artwork never slide under the lens.
+                .displayCutoutPadding()
                 .navigationBarsPadding()
                 .pointerInput(showAudioPipeline, panelScrolling) {
                     if (showAudioPipeline || panelScrolling) return@pointerInput
@@ -4462,6 +4467,7 @@ private fun WidePlayerControls(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .displayCutoutPadding()
                 .navigationBarsPadding(),
             contentAlignment = Alignment.Center,
         ) {
@@ -7186,11 +7192,11 @@ private fun VibeRow(
             Text(
                 text = vibeLabel(entry),
                 style = MaterialTheme.typography.labelLarge,
-                color = if (selected) Color(0xFF4ADE80) else Color.White.copy(alpha = 0.6f),
+                color = if (selected) MatchHarmonic else Color.White.copy(alpha = 0.6f),
                 modifier = Modifier
                     .clip(RoundedCornerShape(percent = 50))
                     .background(
-                        if (selected) Color(0xFF4ADE80).copy(alpha = 0.14f)
+                        if (selected) MatchHarmonic.copy(alpha = 0.14f)
                         else Color.White.copy(alpha = 0.06f),
                     )
                     .clickable(onClick = { onSelect(entry) })
@@ -8195,11 +8201,11 @@ private fun KeyBpmRow(
         !hasNext || currentKey.isBlank() || nextKey.isBlank() ->
             Color.White.copy(alpha = 0.45f)
         harmonic && tempoFit(currentBpm, nextBpm) ->
-            Color(0xFF4ADE80).copy(alpha = 0.9f)
+            MatchHarmonic.copy(alpha = 0.9f)
         harmonic ->
-            Color(0xFFFB923C).copy(alpha = 0.9f)
+            MatchDrifting.copy(alpha = 0.9f)
         else ->
-            Color(0xFFF87171).copy(alpha = 0.75f)
+            MatchClash.copy(alpha = 0.75f)
     }
     Row(
         modifier = modifier

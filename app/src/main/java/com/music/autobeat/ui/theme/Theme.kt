@@ -22,6 +22,12 @@ import com.music.autobeat.R
 // spots (Replay's rank badge) that want that specific red regardless of theme.
 val AccentRed = Color(0xFFFA2D48)
 
+// Transition-match arrow colors. Fixed hues, not scheme roles: they must read
+// identically over any artwork, in either theme.
+val MatchHarmonic = Color(0xFF4ADE80)
+val MatchDrifting = Color(0xFFFB923C)
+val MatchClash = Color(0xFFF87171)
+
 private val DarkColors = darkColorScheme(
     primary = Color.White,
     onPrimary = Color.Black,
