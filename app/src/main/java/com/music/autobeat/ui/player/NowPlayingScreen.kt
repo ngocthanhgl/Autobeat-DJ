@@ -3292,7 +3292,10 @@ fun NowPlayingScreen(
                     Column(Modifier.weight(1f)) {
                         // Shrinks as the header collapses, so the queue's
                         // heading doesn't have to compete with it.
-                        val titleSize = lerp(20.sp, 16.sp, p)
+                        // Title shouts, artist answers: 22 Bold against 15
+                        // regular is the top-tier credit hierarchy.
+                        val titleSize = lerp(22.sp, 16.sp, p)
+                        val artistSize = lerp(15.sp, 13.sp, p)
                         // Only the title's own overflow gates the artist's stagger
                         // below — an artist line that's long on its own has no
                         // reason to wait on a title that already fits.
@@ -3306,6 +3309,7 @@ fun NowPlayingScreen(
                             text = song.title,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontSize = titleSize,
+                                fontWeight = FontWeight.Bold,
                             ),
                             color = Color.White,
                             enabled = scrolls,
@@ -3323,7 +3327,7 @@ fun NowPlayingScreen(
                             text = song.artist,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.W500,
-                                fontSize = titleSize,
+                                fontSize = artistSize,
                             ),
                             color = Color.White.copy(alpha = 0.55f),
                             enabled = scrolls,
@@ -3672,7 +3676,8 @@ fun NowPlayingScreen(
                         color = Color.White.copy(alpha = 0.55f),
                     )
                     Text(
-                        text = "-" + formatTime(durationMs - (shown * durationMs).toLong()),
+                        // Total, not negative-remaining: the standard idiom.
+                        text = formatTime(durationMs),
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White.copy(alpha = 0.55f),
                     )
@@ -3733,6 +3738,7 @@ fun NowPlayingScreen(
                     icon = R.drawable.ic_player_previous,
                     contentDescription = stringResource(R.string.widget_previous),
                     size = 48.dp,
+                    touchSize = 64.dp,
                     onClick = onPrevious,
                     // Lit whenever back has something to do — either a track to
                     // step to, or enough elapsed for it to restart this one.
@@ -3765,6 +3771,7 @@ fun NowPlayingScreen(
                     icon = R.drawable.ic_player_next,
                     contentDescription = stringResource(R.string.widget_next),
                     size = 48.dp,
+                    touchSize = 64.dp,
                     onClick = onNext,
                     enabled = hasNext,
                     haptic = Haptic.SkipNext,
@@ -4277,6 +4284,7 @@ private fun WidePlayerControls(
                     icon = R.drawable.ic_player_previous,
                     contentDescription = stringResource(R.string.widget_previous),
                     size = 48.dp,
+                    touchSize = 64.dp,
                     onClick = onPrevious,
                     enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
                     haptic = Haptic.SkipPrevious,
@@ -4305,6 +4313,7 @@ private fun WidePlayerControls(
                     icon = R.drawable.ic_player_next,
                     contentDescription = stringResource(R.string.widget_next),
                     size = 48.dp,
+                    touchSize = 64.dp,
                     onClick = onNext,
                     enabled = hasNext,
                     haptic = Haptic.SkipNext,
@@ -5685,6 +5694,10 @@ private fun LyricsPanel(
     val viewportHeight by remember(listState) {
         derivedStateOf { listState.layoutInfo.viewportSize.height }
     }
+    // The sung line sits a third of the way down, not at the top edge:
+    // context above it, room below. Zero until the first layout pass.
+    val centerOffset = (viewportHeight * 0.30f).toInt()
+    val followScope = rememberCoroutineScope()
     val keepScroll = remember(listState) { keepScrollInList(listState) }
     var browsing by remember { mutableStateOf(false) }
     val onBottomHalfTap: () -> Unit = {
@@ -5805,7 +5818,7 @@ private fun LyricsPanel(
             val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusLine }
             when {
                 !placed -> {
-                    listState.scrollToItem(focusLine, scrollOffset = 0)
+                    listState.scrollToItem(focusLine, scrollOffset = centerOffset)
                     placed = true
                 }
                 // Already on screen, which is the ordinary case of handing over
@@ -5827,7 +5840,7 @@ private fun LyricsPanel(
                 // Somewhere off screen — after a seek, or a long instrumental
                 // scrolled past. How far is not known without laying the rows
                 // out, so this hands back to the list's own staged scroll.
-                else -> listState.animateScrollToItem(focusLine, scrollOffset = 0)
+                else -> listState.animateScrollToItem(focusLine, scrollOffset = centerOffset)
             }
         }
     }
@@ -5850,9 +5863,13 @@ private fun LyricsPanel(
         return
     }
 
+    // A Box so the follow pill can float over the list's foot without
+    // costing the panel a row of layout.
+    Box(modifier) {
     LazyColumn(
         state = listState,
-        modifier = modifier
+        modifier = Modifier
+            .fillMaxSize()
             .bleedHorizontally(PLAYER_GUTTER)
             .nestedScroll(controlsOnScroll)
             .nestedScroll(keepScroll)
@@ -5864,7 +5881,7 @@ private fun LyricsPanel(
         // width further apart and further in than they used to.
         contentPadding = PaddingValues(
             top = 40.dp - GLOW_ROOM,
-            bottom = with(LocalDensity.current) { viewportHeight.toDp() } * 0.8f,
+            bottom = with(LocalDensity.current) { viewportHeight.toDp() } * 0.55f,
             start = PLAYER_GUTTER - GLOW_ROOM,
             end = PLAYER_GUTTER - GLOW_ROOM,
         ),
@@ -6134,6 +6151,16 @@ private fun LyricsPanel(
                     modifier = shape,
                 ) { renderedLine ->
                     Column {
+                        // A timestamp on the line being sung: the rows are
+                        // tap-to-seek, and this is what says so.
+                        if (isActive && isSynced) {
+                            Text(
+                                text = formatTime(line.timeMs),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(start = GLOW_ROOM, bottom = 2.dp),
+                            )
+                        }
                         PanelVoice(
                             line = renderedLine,
                             clock = clock,
@@ -6183,6 +6210,34 @@ private fun LyricsPanel(
                         }
                     }
                 }
+            }
+        }
+        if (browsing && !activeOnScreen) {
+            // A visible way back to the song. The resume used to be two
+            // invisible timers, and a reader who had scrolled on had no idea
+            // how to get back except waiting for them.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 24.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.follow),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.14f))
+                        .clickable {
+                            browsing = false
+                            followScope.launch {
+                                if (focusLine in lines.indices) {
+                                    listState.animateScrollToItem(focusLine, centerOffset)
+                                }
+                            }
+                        }
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                )
             }
         }
     }
@@ -7419,6 +7474,16 @@ private fun InlineQueue(
                 items = manualRows,
                 key = { index, _ -> manualKeys[index] },
             ) { index, song ->
+                // A section head over the first row still to come: history
+                // above, the future below. Only when both exist.
+                if (index == firstMovable && firstMovable > 0 && firstMovable < manualRows.size) {
+                    Text(
+                        text = stringResource(R.string.up_next),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color.White.copy(alpha = 0.55f),
+                        modifier = Modifier.padding(start = 34.dp, top = 12.dp, bottom = 4.dp),
+                    )
+                }
                 val key = manualKeys[index]
                 val dragging = manualDrag.draggedKey == key
                 InlineQueueRow(
@@ -7929,7 +7994,7 @@ private fun InlineQueueRow(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(if (dragging) Color.White.copy(alpha = 0.06f) else Color.Transparent)
+            .background(if (dragging || isCurrent) Color.White.copy(alpha = 0.06f) else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -7983,6 +8048,17 @@ private fun InlineQueueRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        song.durationText?.let { duration ->
+            // Trailing duration, the Up Next idiom: glanceable length
+            // without opening the row.
+            Text(
+                text = duration,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.55f),
+                maxLines = 1,
+            )
+            Spacer(Modifier.width(10.dp))
+        }
         if (isCurrent) {
             Icon(
                 Icons.Rounded.GraphicEq,
@@ -7994,7 +8070,7 @@ private fun InlineQueueRow(
         }
         Box(
             modifier = Modifier
-                .size(28.dp)
+                .size(48.dp)
                 .clip(CircleShape)
                 .clickable(onClick = onRemove),
             contentAlignment = Alignment.Center,
@@ -8003,7 +8079,7 @@ private fun InlineQueueRow(
                 Icons.Rounded.Close,
                 contentDescription = stringResource(R.string.remove_from_queue),
                 tint = Color.White.copy(alpha = 0.55f),
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(20.dp),
             )
         }
     }

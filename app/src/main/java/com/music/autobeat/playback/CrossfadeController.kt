@@ -699,13 +699,13 @@ class CrossfadeController(
                 engaged = false
             }
             if (engaged) {
-                val k = 1.0 - exp(-dtMs / 150.0)
+                val k = 1.0 - exp(-dtMs / 900.0)
                 env = (env + (1f - env) * k.toFloat()).coerceIn(0f, 1f)
                 holdUntil = nowMs + 300L
                 return env
             }
             if (nowMs < holdUntil) return env
-            env *= exp(-dtMs / 350.0).toFloat()
+            env *= exp(-dtMs / 600.0).toFloat()
             if (env < 0.01f) env = 0f
             return env
         }
@@ -1334,7 +1334,15 @@ class CrossfadeController(
                 tick()
                 delay(
                     when (phase) {
-                        Phase.IDLE -> IDLE_STEP_MS
+                        // Post-handoff glide (finish volume + EQ_OPEN) is 220 ms
+                        // stepped at 250 ms IDLE cadence it would snap in one
+                        // tick, so tick fast until the glide disarms.
+                        Phase.IDLE ->
+                            if (pendingFinishVolumeStartMs >= 0L || pendingEqOpenStartMs >= 0L) {
+                                FADE_STEP_MS
+                            } else {
+                                IDLE_STEP_MS
+                            }
                         Phase.ARMING -> ARM_STEP_MS
                         Phase.FADING -> FADE_STEP_MS
                         Phase.BAILING -> BAIL_STEP_MS
