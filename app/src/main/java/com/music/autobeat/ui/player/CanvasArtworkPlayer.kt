@@ -306,10 +306,15 @@ fun CanvasArtworkPlayer(
     // folded into the one above: that one is keyed on [rendered] so it fires
     // again on every fade-in, and this one only needs to start once a fade-in
     // has actually happened and then keep going for as long as it holds.
-    LaunchedEffect(rendered, refreshFrameEveryMs, frameCapturePx, clipAspect, contentMode, alignPortraitTop) {
+    LaunchedEffect(rendered, foreground, refreshFrameEveryMs, frameCapturePx, clipAspect, contentMode, alignPortraitTop) {
         val interval = refreshFrameEveryMs ?: return@LaunchedEffect
-        if (!rendered) return@LaunchedEffect
+        if (!rendered || !foreground) return@LaunchedEffect
         while (isActive) {
+            // The player itself pauses off-screen, but this loop would keep
+            // reading back the last frame every few seconds all night. Stop
+            // with the foreground and resume with it; the next rendered frame
+            // restarts the follow-up through [rendered].
+            if (!foreground) return@LaunchedEffect
             delay(interval)
             val view = textureView ?: continue
             view.captureAt(frameCapturePx, clipAspect, contentMode, alignPortraitTop)?.let(onFrameCaptured)
@@ -510,7 +515,12 @@ private fun TextureView.captureAt(
         val right = (frame.width - left).coerceAtLeast(left + 1)
         val bottom = if (alignPortraitTop) contentHeight.toInt().coerceIn(1, frame.height) else
             (frame.height - top).coerceAtLeast(top + 1)
-        Bitmap.createBitmap(frame, left, top, right - left, bottom - top)
+        val cropped = Bitmap.createBitmap(frame, left, top, right - left, bottom - top)
+        // The crop is a copy; the full readback would otherwise sit until the
+        // finalizer gets round to it, every few seconds, for as long as the
+        // clip plays.
+        frame.recycle()
+        cropped
     }.getOrNull()
 }
 
@@ -519,6 +529,42 @@ private fun TextureView.captureAt(
  * the GPU is not an event. Every consumer reduces this to a handful of colours.
  */
 private const val FRAME_CAPTURE_PX = 128
+
+/**
+ * Whether a fresh capture is worth publishing: mean per-channel distance over
+ * a stride of pixels. A clip holding a steady shot sends near-identical frames
+ * every few seconds, and each publish fans out to a mesh rebuild, a palette
+ * pass and a fullscreen re-blur — so a frame that says nothing new is dropped
+ * (and recycled by the caller) instead of repainting the whole backdrop.
+ */
+internal fun canvasFrameChanged(old: Bitmap?, new: Bitmap, threshold: Float = 6f): Boolean {
+    if (old == null || old.isRecycled || new.isRecycled) return true
+    if (old.width != new.width || old.height != new.height) return true
+    val w = old.width
+    val h = old.height
+    val size = w * h
+    if (size <= 0) return true
+    val a = IntArray(size)
+    val b = IntArray(size)
+    old.getPixels(a, 0, w, 0, 0, w, h)
+    new.getPixels(b, 0, w, 0, 0, w, h)
+    var acc = 0L
+    var n = 0
+    var i = 0
+    // Stride keeps this bounded if a caller ever hands in a bigger frame.
+    val step = (size / 4096).coerceAtLeast(1)
+    while (i < size) {
+        val p1 = a[i]
+        val p2 = b[i]
+        acc += kotlin.math.abs((p1 shr 16 and 0xFF) - (p2 shr 16 and 0xFF)) +
+            kotlin.math.abs((p1 shr 8 and 0xFF) - (p2 shr 8 and 0xFF)) +
+            kotlin.math.abs((p1 and 0xFF) - (p2 and 0xFF))
+        n++
+        i += step
+    }
+    if (n == 0) return true
+    return acc.toFloat() / (n * 3) > threshold
+}
 
 /**
  * A TextureView stretches its content to its own bounds. Compensate with a

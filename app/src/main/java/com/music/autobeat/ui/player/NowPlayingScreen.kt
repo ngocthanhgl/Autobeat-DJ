@@ -288,10 +288,12 @@ import kotlin.random.Random
 /**
  * Comfortably over the sleeve's drawn size on a phone, without wasting bytes.
  *
- * A rung on the app-wide ladder rather than a number of the player's own, so a
- * large home-screen widget asks for the same copy — see [PLAYER_ART_PX].
+ * Deliberately a rung below [PLAYER_ART_PX]: the player holds several of these
+ * at once (current, held previous, prefetches) plus per-capture frames, and at
+ * 1200px each is ~5.8MB — 800px is ~2.6MB and still past what the sleeve and
+ * banner draw. See [PLAYER_ART_PX].
  */
-private const val ART_PX = PLAYER_ART_PX
+private const val ART_PX = 800
 
 /**
  * How many further goes a cover that failed to load gets.
@@ -1322,10 +1324,17 @@ fun NowPlayingScreen(
     var romanizationJob by remember(song.videoId, translationLanguage, lyrics) {
         mutableStateOf<Job?>(null)
     }
-    DisposableEffect(song.videoId, translationLanguage, lyrics) {
+    // The remembers above reset to null on a key change BEFORE onDispose runs,
+    // so reading [translationJob] in the dispose block would see the new null
+    // and leak the in-flight request. Hoist the jobs into the keys instead:
+    // dispose then cancels whatever was current when the effect started —
+    // including a job launched by a tap after the track's effect began.
+    val liveTranslation = translationJob
+    val liveRomanization = romanizationJob
+    DisposableEffect(song.videoId, translationLanguage, lyrics, liveTranslation, liveRomanization) {
         onDispose {
-            translationJob?.cancel()
-            romanizationJob?.cancel()
+            liveTranslation?.cancel()
+            liveRomanization?.cancel()
         }
     }
     val displayedLyrics = when (lyricsDisplayMode) {
@@ -1912,13 +1921,20 @@ fun NowPlayingScreen(
         }
     }
     LaunchedEffect(artLoaded, artUrl) {
-        if (artLoaded && prevArtRequest != null) {
+        if (!artLoaded || prevArtRequest == null) return@LaunchedEffect
+        // Held while a panel transition is in flight: clearing the old
+        // cover mid-flight flashes the sleeve behind the banner. Wait for
+        // the flight to land instead of giving up on the first pass — but
+        // not forever, or a stuck transition pins a full-size bitmap until
+        // the next track change.
+        repeat(10) {
             delay(300)
-            // held while a panel transition is in flight: clearing the old
-            // cover mid-flight flashes the sleeve behind the banner.
-            if (p > 0f && p < 1f) return@LaunchedEffect
-            prevArtRequest = null
+            if (p <= 0f || p >= 1f) {
+                prevArtRequest = null
+                return@LaunchedEffect
+            }
         }
+        prevArtRequest = null
     }
     LaunchedEffect(artUrl, artFailed) {
         // A track with no artwork at all fails immediately and would fail
@@ -2486,7 +2502,21 @@ fun NowPlayingScreen(
                     portraitRevealBounds = playerBounds,
                     presentationAlpha = if (canvasFirstPortrait) (1f - 2f * p).coerceIn(0f, 1f) else 1f,
                     onRenderedChanged = { canvasRendered = it },
-                    onFrameCaptured = { canvasFrame = it },
+                    onFrameCaptured = { frame ->
+                        // A steady shot sends near-identical frames every few
+                        // seconds; publishing each rebuilds the mesh, re-runs
+                        // the palette and re-blurs the whole screen for no
+                        // visible change. Drop those, recycle the spare, and
+                        // retire the replaced frame instead of leaving it for
+                        // the finalizer.
+                        val old = canvasFrame
+                        if (!canvasFrameChanged(old, frame)) {
+                            frame.recycle()
+                        } else {
+                            canvasFrame = frame
+                            if (old != null && !old.isRecycled) old.recycle()
+                        }
+                    },
                     refreshFrameEveryMs = meshRefreshMs,
                     onCoverChanged = { canvasCover.floatValue = it },
                     bottomFade = if (canvasFirstPortrait) canvasFirstFadeFraction else HERO_FADE_FRACTION,
@@ -3096,7 +3126,15 @@ fun NowPlayingScreen(
                                     canvas = clip,
                                     isPlaying = isPlaying,
                                     onRenderedChanged = { canvasRendered = it },
-                                    onFrameCaptured = { canvasFrame = it },
+                                    onFrameCaptured = { frame ->
+                                        val old = canvasFrame
+                                        if (!canvasFrameChanged(old, frame)) {
+                                            frame.recycle()
+                                        } else {
+                                            canvasFrame = frame
+                                            if (old != null && !old.isRecycled) old.recycle()
+                                        }
+                                    },
                                     refreshFrameEveryMs = meshRefreshMs,
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -4736,6 +4774,10 @@ private fun WideCredits(
  * whole line would recompose sixty times a second.
  */
 @Composable
+/** A jump bigger than this between the polled report and the clock's own advance
+ * is a seek or a large correction, not jitter — resync straight to it. */
+private const val LYRIC_RESYNC_MS = 1000L
+
 private fun rememberLyricClock(positionMs: Long, isPlaying: Boolean): MutableLongState {
     val clock = remember { mutableLongStateOf(positionMs) }
     // Gated on the app being on screen. The loop asks for a frame, writes a
@@ -4744,19 +4786,29 @@ private fun rememberLyricClock(positionMs: Long, isPlaying: Boolean): MutableLon
     // the right trade for a lyric being read and the wrong one for a phone in a
     // pocket, and the composition alone cannot tell the two apart.
     //
-    // Resuming needs no catch-up: [positionMs] is a key, so coming back
-    // restarts the effect and reconciles the latest playback report before
-    // requesting another frame.
+    // Resuming needs no catch-up: the loop below reads the latest report
+    // through [latestPos] every frame, so coming back reconciles without a
+    // restart. [positionMs] is deliberately NOT a key — it is rewritten twice
+    // a second by the poll loop, and keying on it tore this 60fps callback
+    // down and recreated it twice a second for the whole session.
     val foreground = rememberIsForeground()
-    LaunchedEffect(positionMs, isPlaying, foreground) {
-        clock.longValue = reconcileLyricPosition(clock.longValue, positionMs)
+    val latestPos by rememberUpdatedState(positionMs)
+    LaunchedEffect(isPlaying, foreground) {
+        clock.longValue = reconcileLyricPosition(clock.longValue, latestPos)
         if (!isPlaying || !foreground) return@LaunchedEffect
+        val base = latestPos
         val firstFrame = withFrameMillis { it }
         while (true) {
             withFrameMillis { frame ->
-                // Advance from the authoritative report, not the held display value:
-                // otherwise each small correction would accumulate permanent drift.
-                clock.longValue = maxOf(clock.longValue, positionMs + frame - firstFrame)
+                val now = latestPos
+                val expected = base + frame - firstFrame
+                // A seek or a large correction jumps straight there; ordinary
+                // jitter keeps the monotonic advance, as before.
+                clock.longValue = if (abs(now - expected) > LYRIC_RESYNC_MS) {
+                    reconcileLyricPosition(clock.longValue, now)
+                } else {
+                    maxOf(clock.longValue, expected)
+                }
             }
         }
     }

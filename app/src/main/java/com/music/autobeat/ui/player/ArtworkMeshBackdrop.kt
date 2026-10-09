@@ -200,9 +200,11 @@ fun ArtworkMeshBackdrop(
      * at every control point, so there are no creases left for this to remove.
      * It is here to take the last of the edge off, and a wider one would only
      * cost milliseconds — which matters, because a clip on screen asks for it
-     * several times a second.
+     * several times a second. Kept small for the same reason a fullscreen
+     * RenderEffect bills every pixel on every redraw: 16.dp reads as soft as
+     * 32.dp over an already-smooth mesh, at a fraction of the GPU cost.
      */
-    blurRadius: Dp = 32.dp,
+    blurRadius: Dp = 16.dp,
 ) {
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()

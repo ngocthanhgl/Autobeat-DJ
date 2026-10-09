@@ -95,7 +95,7 @@ fun MeshGradientBackground(
      * a small surface needs proportionally less, or the four colours blend into
      * one wash before they reach its edges.
      */
-    blurRadius: Dp = 64.dp,
+    blurRadius: Dp = 24.dp,
     /**
      * Off for a surface that should read as a still image: colours snap
      * straight to target instead of crossfading, and the blobs never drift
