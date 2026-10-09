@@ -272,7 +272,7 @@ fun EqualizerScreen(
     }
 
     if (pickingPreset) {
-        val presetSheetState = rememberModalBottomSheetState()
+        val presetSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = { pickingPreset = false },
             sheetState = presetSheetState,

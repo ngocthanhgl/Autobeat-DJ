@@ -26,6 +26,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -1978,6 +1980,11 @@ private fun AutobeatApp(
         ) {
             showReplay = false
         }
+        // The full-screen player is a ModalBottomSheet: on API 33+ the sheet's
+        // own dismiss answers first and inner overlays already outrank it via
+        // OverlayBack, so this only closes a bare player — never a queue or
+        // lyrics panel sitting on top of it.
+        BackHandler(enabled = showNowPlaying) { showNowPlaying = false }
         BackHandler(
             enabled = detail != null && !showSettings && !showAccountScrobbling && !showSources && !showListenTogether &&
                 !showEqualizer && !showReplay,
@@ -2084,7 +2091,21 @@ private fun AutobeatApp(
                         val libraryTabKey = "$TAB_KEY$TAB_LIBRARY"
                         val libraryShowAllSwap = (initialState == "library_show_all" && targetState == libraryTabKey) ||
                             (targetState == "library_show_all" && initialState == libraryTabKey)
-                        if (tabSwap || libraryShowAllSwap) {
+                        if (tabSwap) {
+                            // Shared-axis X: travel reads by direction, like the
+                            // local library's own tab slides. Forward enters
+                            // from the right with a 1/3-parallax exit; back
+                            // mirrors it.
+                            val from = initialState.removePrefix(TAB_KEY).toIntOrNull()
+                            val to = targetState.removePrefix(TAB_KEY).toIntOrNull()
+                            if (from != null && to != null && to < from) {
+                                (slideInHorizontally { -it } + fadeIn()) togetherWith
+                                    (slideOutHorizontally { it / 3 } + fadeOut())
+                            } else {
+                                (slideInHorizontally { it } + fadeIn()) togetherWith
+                                    (slideOutHorizontally { -it / 3 } + fadeOut())
+                            }
+                        } else if (libraryShowAllSwap) {
                             EnterTransition.None togetherWith ExitTransition.None
                         } else {
                             fadeIn(tween(180)) togetherWith fadeOut(tween(180))
@@ -3033,7 +3054,7 @@ private fun AutobeatApp(
             // carries the per-entry id a removal is expressed in.
             val editable = viewModel.editablePlaylist(detail?.browseId)
                 ?.takeIf { !fromPlayer && song.setVideoId != null }
-            val songSheetState = rememberModalBottomSheetState()
+            val songSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ModalBottomSheet(
                 onDismissRequest = { songActions = null },
                 sheetState = songSheetState,
@@ -3227,7 +3248,7 @@ private fun AutobeatApp(
                 DownloadSession.markSeen()
             }
             BackHandler(onBack = closeDownloadManager)
-            val downloadSheetState = rememberModalBottomSheetState()
+            val downloadSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ModalBottomSheet(
                 onDismissRequest = closeDownloadManager,
                 sheetState = downloadSheetState,
@@ -3249,7 +3270,7 @@ private fun AutobeatApp(
                 playlistTarget = null
                 creatingPlaylist = false
             }
-            val playlistSheetState = rememberModalBottomSheetState()
+            val playlistSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ModalBottomSheet(
                 onDismissRequest = dismiss,
                 sheetState = playlistSheetState,
@@ -3313,7 +3334,7 @@ private fun AutobeatApp(
             val remote = target.browseId?.startsWith("local:") == false
             val pinnedPlaylists by AppSettings.pinnedPlaylists.collectAsStateWithLifecycle()
             val pinnableId = target.browseId?.takeIf { target.type == BrowseType.PLAYLIST }
-            val browseSheetState = rememberModalBottomSheetState()
+            val browseSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ModalBottomSheet(
                 onDismissRequest = { browseActions = null },
                 sheetState = browseSheetState,

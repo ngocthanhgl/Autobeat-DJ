@@ -1166,7 +1166,7 @@ fun SettingsScreen(
     }
 
     picking?.let { target ->
-        val qualitySheetState = rememberModalBottomSheetState()
+        val qualitySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = { picking = null },
             sheetState = qualitySheetState,
@@ -1200,7 +1200,7 @@ fun SettingsScreen(
     }
 
     if (pickingDownloadQuality) {
-        val downloadQualitySheetState = rememberModalBottomSheetState()
+        val downloadQualitySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = { pickingDownloadQuality = false },
             sheetState = downloadQualitySheetState,
@@ -1219,7 +1219,7 @@ fun SettingsScreen(
     }
 
     if (pickingAutomixPerformance) {
-        val automixSheetState = rememberModalBottomSheetState()
+        val automixSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = { pickingAutomixPerformance = false },
             sheetState = automixSheetState,

@@ -7,6 +7,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -335,7 +336,9 @@ fun DetailScreen(
     AnimatedContent(
         targetState = activeShelf,
         transitionSpec = {
-            fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(180))
+            // Fade-through: the incoming shelf rises 4% as it fades in.
+            (fadeIn(animationSpec = tween(220)) + scaleIn(initialScale = 0.96f)) togetherWith
+                fadeOut(animationSpec = tween(180))
         },
         label = "artist_shelf_transition",
         modifier = modifier.fillMaxSize(),

@@ -53,6 +53,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import com.music.autobeat.ui.theme.MotionTokens
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -219,7 +220,9 @@ fun FloatingTabBar(
     SharedTransitionLayout(modifier = modifier) {
         AnimatedContent(
             targetState = scrollConnection.isInline,
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            transitionSpec = {
+                fadeIn(MotionTokens.FadeMed) togetherWith fadeOut(MotionTokens.FadeFast)
+            },
             contentAlignment = Alignment.BottomCenter
         ) { isInline ->
             if (isInline) {
