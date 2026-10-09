@@ -241,6 +241,7 @@ import com.music.autobeat.data.settings.TrackAnalysisState
 import com.music.autobeat.playback.smart.camelotLabel
 import com.music.autobeat.playback.smart.camelotOf
 import com.music.autobeat.playback.smart.isHarmonicMatch
+import com.music.autobeat.playback.smart.tempoFit
 import com.music.autobeat.data.canvas.CanvasArtwork
 import com.music.autobeat.data.canvas.CanvasRepository
 import com.music.autobeat.data.lyrics.CharGrowth
@@ -8153,13 +8154,18 @@ private fun KeyBpmRow(
         ),
         label = "keybpm-dots-alpha",
     )
-    // Green when the move is harmonic by the Camelot rules, dim red when it
-    // clashes, neutral while either side is still being measured.
+    // Green when key-harmonic AND tempo-tight, orange when key-harmonic
+    // but the stretcher has real work to do (>±3%), dim red on a key
+    // clash, neutral while either side is still being measured.
+    val harmonic = hasNext && currentKey.isNotBlank() && nextKey.isNotBlank() &&
+        isHarmonicMatch(currentKey, nextKey)
     val arrowColor = when {
         !hasNext || currentKey.isBlank() || nextKey.isBlank() ->
             Color.White.copy(alpha = 0.45f)
-        isHarmonicMatch(currentKey, nextKey) ->
+        harmonic && tempoFit(currentBpm, nextBpm) ->
             Color(0xFF4ADE80).copy(alpha = 0.9f)
+        harmonic ->
+            Color(0xFFFB923C).copy(alpha = 0.9f)
         else ->
             Color(0xFFF87171).copy(alpha = 0.75f)
     }

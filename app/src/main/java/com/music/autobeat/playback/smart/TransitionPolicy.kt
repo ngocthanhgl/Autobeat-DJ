@@ -1171,6 +1171,16 @@ fun isHarmonicMatch(left: String, right: String): Boolean {
     return step == 1
 }
 
+/**
+ * Tempo half of the arrow verdict: both sides known and within ±[pct].
+ * Key-harmonic but tempo-apart is the orange tier — the stretcher can still
+ * save it, unlike a key clash.
+ */
+fun tempoFit(leftBpm: Double, rightBpm: Double, pct: Double = 0.03): Boolean {
+    if (leftBpm <= 0 || rightBpm <= 0) return false
+    return abs(leftBpm - rightBpm) / min(leftBpm, rightBpm) <= pct
+}
+
 private fun keyScoreOf(
     leftNumber: Int,
     leftMinor: Boolean,

@@ -246,6 +246,13 @@ object HarmonicSort {
         val scope: CoroutineScope,
         val analyzer: TrackAnalyzer,
         val cache: AudioCache,
+        /**
+         * True while a transition owns the next slot. sortAndApply freezes
+         * slot 0 on this — re-sorting the next track mid-blend re-planned
+         * and bailed blends (session-log-20). Defaults to false so detached
+         * callers (tests, pre-arm sorts) keep the old behavior.
+         */
+        val isBlending: () -> Boolean = { false },
     )
 
     /**
@@ -671,7 +678,18 @@ object HarmonicSort {
         if (from >= player.mediaItemCount) return
         val upcoming = List(player.mediaItemCount - from) { player.getMediaItemAt(from + it) }
         val scope = scopeIds.toSet()
-        val sortableSlots = upcoming.indices.filter { upcoming[it].mediaId in scope }
+        val allSlots = upcoming.indices.filter { upcoming[it].mediaId in scope }
+        // Zone-guard: while a blend is arming or fading, slot 0 is the next
+        // track the transition already planned around — moving it under the
+        // controller's feet is what bailed blends in session-log-20. The
+        // sort still reorders from slot 1 on, and the freeze lifts at
+        // handoff when the next slot becomes an ordinary queue slot again.
+        val sortableSlots = if (deps.isBlending() && allSlots.firstOrNull() == 0) {
+            TrackLog.d("Autobeat", "harmonic apply: blend owns next, freezing slot 0", null)
+            allSlots.drop(1)
+        } else {
+            allSlots
+        }
         if (sortableSlots.size <= 1) {
             TrackLog.d("Autobeat", "harmonic apply: only ${sortableSlots.size} scope track(s) left, keeping order", null)
             return

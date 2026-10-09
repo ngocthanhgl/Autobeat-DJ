@@ -1004,7 +1004,7 @@ class PlaybackService : MediaLibraryService() {
                 if (HarmonicSort.isActive) {
                     HarmonicSort.topUp(
                         exoPlayer,
-                        HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+                        HarmonicSort.Deps(scope, trackAnalyzer, AudioCache) { crossfade?.isBlending == true },
                         current = { player },
                     )
                     // The window slides on playlist change even when the
@@ -1012,7 +1012,7 @@ class PlaybackService : MediaLibraryService() {
                     // the live window instead of freezing mid-measure.
                     HarmonicSort.refreshProgress(
                         exoPlayer,
-                        HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+                        HarmonicSort.Deps(scope, trackAnalyzer, AudioCache) { crossfade?.isBlending == true },
                     )
                 }
                 updateAnalysisPriority(exoPlayer)
@@ -1832,7 +1832,7 @@ class PlaybackService : MediaLibraryService() {
         // and its progress lives in the queue panel that sent this.
         HarmonicSort.toggle(
             ep,
-            HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+            HarmonicSort.Deps(scope, trackAnalyzer, AudioCache) { crossfade?.isBlending == true },
             current = { player },
             tapId = tapId,
         )
@@ -1850,7 +1850,7 @@ class PlaybackService : MediaLibraryService() {
         // Vibe trace V1: every vibe tap names old->new, so the session log
         // proves the tap arrived (session-log-14 cycled vibes with no trace).
         TrackLog.d("Autobeat", "harmonic vibe: $old->$vibe, re-sorting live scope", null)
-        HarmonicSort.resort(ep, HarmonicSort.Deps(scope, trackAnalyzer, AudioCache))
+        HarmonicSort.resort(ep, HarmonicSort.Deps(scope, trackAnalyzer, AudioCache) { crossfade?.isBlending == true })
     }
 
     private fun toggleAutoplayFromNotification() {
@@ -2340,14 +2340,14 @@ class PlaybackService : MediaLibraryService() {
         if (HarmonicSort.isActive) {
             HarmonicSort.topUp(
                 exoPlayer,
-                HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+                HarmonicSort.Deps(scope, trackAnalyzer, AudioCache) { crossfade?.isBlending == true },
                 current = { player },
             )
             // Same slide-no- playlist-change case as above: republish even
             // while the worker is parked or busy.
             HarmonicSort.refreshProgress(
                 exoPlayer,
-                HarmonicSort.Deps(scope, trackAnalyzer, AudioCache),
+                HarmonicSort.Deps(scope, trackAnalyzer, AudioCache) { crossfade?.isBlending == true },
             )
         }
 
