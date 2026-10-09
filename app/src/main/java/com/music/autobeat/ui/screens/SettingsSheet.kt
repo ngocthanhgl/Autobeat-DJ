@@ -1267,6 +1267,15 @@ private fun DownloadQuality.localizedLabel(): String = stringResource(
 )
 
 @Composable
+private fun DjIntensity.localizedLabel(): String = stringResource(
+    when (this) {
+        DjIntensity.LOW -> R.string.dj_intensity_low
+        DjIntensity.MEDIUM -> R.string.dj_intensity_medium
+        DjIntensity.HIGH -> R.string.dj_intensity_high
+    },
+)
+
+@Composable
 private fun ThemeMode.localizedLabel(): String = stringResource(
     when (this) {
         ThemeMode.SYSTEM -> R.string.system
