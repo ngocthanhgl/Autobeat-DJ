@@ -289,7 +289,9 @@ private fun GlassNowPlaying(
     )
 
     val artSize = if (isInline) 32.dp else 40.dp
-    val glyphSlot = if (isInline) 32.dp else 40.dp
+    // Touch targets: inline caps at 40dp (the tab pill's 45dp row sets the
+    // height — 48dp would stretch it); expanded takes the full 48dp.
+    val glyphSlot = if (isInline) 40.dp else 48.dp
     val glyphSize = if (isInline) 24.dp else 32.dp
 
     Box(

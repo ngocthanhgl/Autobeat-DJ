@@ -5290,11 +5290,10 @@ private fun TranslationToggleButton(
         animationSpec = MotionTokens.FadeFast,
         label = "translateDisc",
     )
+    // 48dp touch target around the 34dp disc: the hitbox grows, the visual doesn't.
     Box(
         modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = discAlpha))
+            .size(48.dp)
             .clickable(
                 enabled = enabled,
                 interactionSource = remember { MutableInteractionSource() },
@@ -5303,6 +5302,13 @@ private fun TranslationToggleButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = discAlpha)),
+            contentAlignment = Alignment.Center,
+        ) {
         if (state is LyricsTranslationUiState.Loading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(16.dp),
@@ -5319,6 +5325,7 @@ private fun TranslationToggleButton(
                 tint = tint,
                 modifier = Modifier.size(19.dp),
             )
+        }
         }
     }
 }
@@ -5341,11 +5348,10 @@ private fun RomanizationToggleButton(
         animationSpec = MotionTokens.FadeFast,
         label = "romanizeDisc",
     )
+    // 48dp touch target around the 34dp disc: the hitbox grows, the visual doesn't.
     Box(
         modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = discAlpha))
+            .size(48.dp)
             .clickable(
                 enabled = enabled,
                 interactionSource = remember { MutableInteractionSource() },
@@ -5354,6 +5360,13 @@ private fun RomanizationToggleButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = discAlpha)),
+            contentAlignment = Alignment.Center,
+        ) {
         if (state is LyricsTranslationUiState.Loading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(16.dp),
@@ -5370,6 +5383,7 @@ private fun RomanizationToggleButton(
                 tint = tint,
                 modifier = Modifier.size(19.dp),
             )
+        }
         }
     }
 }
@@ -6433,7 +6447,8 @@ private fun VideoAudioVersionButton(
     val shape = RoundedCornerShape(percent = 50)
     Box(
         modifier = modifier
-            .height(44.dp)
+            // 48dp touch height; the pill visual keeps its own padding.
+            .height(48.dp)
             .clip(shape)
             .optimizedHazeEffect(
                 state = hazeState,
@@ -6535,11 +6550,10 @@ private fun CircleGlyph(
         animationSpec = MotionTokens.FadeFast,
         label = "glyphDisc",
     )
+    // 48dp touch target around the 34dp disc: the hitbox grows, the visual doesn't.
     Box(
         modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = discAlpha))
+            .size(48.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -6549,6 +6563,13 @@ private fun CircleGlyph(
             },
         contentAlignment = Alignment.Center,
     ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = discAlpha)),
+            contentAlignment = Alignment.Center,
+        ) {
         Crossfade(
             targetState = icon,
             animationSpec = MotionTokens.FadeFast,
@@ -6560,6 +6581,7 @@ private fun CircleGlyph(
                 tint = Color.White,
                 modifier = Modifier.size(19.dp),
             )
+        }
         }
     }
 }
@@ -6608,7 +6630,7 @@ private fun TransportGlyph(
     }
 }
 
-private val BOTTOM_ACTION_SIZE = 44.dp
+private val BOTTOM_ACTION_SIZE = 48.dp
 
 /**
  * One half of the output capsule — wider than it is tall, so the capsule reads

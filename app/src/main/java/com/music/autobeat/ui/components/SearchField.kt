@@ -81,11 +81,12 @@ fun SearchField(
             Icons.Rounded.Search,
             contentDescription = stringResource(R.string.search),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            // 48dp touch target; the 20dp glyph + 6dp inset keep the visual.
             modifier = Modifier
-                .size(32.dp)
+                .size(48.dp)
                 .clip(CircleShape)
                 .clickable(enabled = query.isNotBlank(), onClick = submit)
-                .padding(6.dp),
+                .padding(14.dp),
         )
         Spacer(Modifier.width(4.dp))
         Box(Modifier.weight(1f)) {
@@ -116,7 +117,8 @@ fun SearchField(
         if (query.isNotEmpty()) {
             Box(
                 modifier = Modifier
-                    .size(28.dp)
+                    // 48dp touch target; the 18dp glyph stays centred.
+                    .size(48.dp)
                     .clip(CircleShape)
                     .clickable {
                         onQueryChange("")

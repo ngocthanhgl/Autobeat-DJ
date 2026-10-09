@@ -293,7 +293,8 @@ private fun NewPlaylistForm(
             if (name.isNotEmpty()) {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
+                        // 48dp touch target; the 18dp glyph stays centred.
+                        .size(48.dp)
                         .clip(CircleShape)
                         .clickable { name = "" },
                     contentAlignment = Alignment.Center,

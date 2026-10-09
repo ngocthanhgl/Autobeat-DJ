@@ -50,10 +50,10 @@ import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 
 /**
- * The transport buttons' touch target. Material's default 48dp is what a bar
- * this slim is really made of, so it sets the height on its own.
+ * The transport buttons' touch target: full 48dp per Material. The bar grows
+ * 8dp for it — a correct hitbox beats a slimmer bar.
  */
-private val GLYPH_SLOT = 40.dp
+private val GLYPH_SLOT = 48.dp
 
 /**
  * The play and skip glyphs themselves.
