@@ -223,6 +223,7 @@ import coil3.request.allowHardware
 import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.music.autobeat.ui.theme.MotionTokens
 import com.music.autobeat.ui.theme.SystemBarIcons
 import com.music.autobeat.ui.rememberIsForeground
 import com.music.autobeat.ui.LyricsProviderState
@@ -330,15 +331,6 @@ private const val SEEK_SETTLE_TIMEOUT_MS = 4_000L
 private val THUMB_SIZE = 54.dp
 private val HEADER_HEIGHT = 60.dp
 private val ART_TITLE_GAP = 20.dp
-/**
- * How long the sleeve takes to travel the whole way between the full player and
- * the queue's header.
- *
- * Spent in proportion rather than in full: a drag released four fifths of the
- * way up has a fifth of the journey left and gets a fifth of the time for it.
- * Only the toggle, which travels end to end, ever spends all of it.
- */
-private const val QUEUE_TRAVEL_MS = 420
 /**
  * How far up the sleeve has to have been dragged for a release to carry on
  * opening the queue rather than falling back, as a share of the sleeve's travel.
@@ -460,15 +452,6 @@ private val WIDE_LYRICS_PLAYER_MIN_WIDTH = 700.dp
  * stops needing to wrap.
  */
 private val WIDE_LYRICS_MAX_WIDTH = 1000.dp
-
-/**
- * How long the split takes to open or close.
- *
- * Matches the 420ms the sleeve already takes to collapse when the phone layout
- * opens its own lyrics, so the two surfaces answer the same gesture at the same
- * pace.
- */
-private const val WIDE_SPLIT_MS = 420
 
 /**
  * The artwork's own play/pause/scrub pose in the two wide layouts. Three flat
@@ -908,7 +891,6 @@ internal fun rememberPlayerControlsOnScroll(
 private const val LYRICS_CONTROLS_IDLE_MS = 5_000L
 
 private const val LYRICS_UNAVAILABLE_HOLD_MS = 5_000L
-private const val LYRICS_UNAVAILABLE_FADE_MS = 900
 private const val LIGHT_ARTWORK_LUMINANCE_THRESHOLD = 0.45f
 
 private val artworkLuminanceCache = LruCache<String, Float>(20)
@@ -1654,10 +1636,9 @@ fun NowPlayingScreen(
         animate(
             initialValue = from,
             targetValue = target,
-            animationSpec = tween(
-                durationMillis = (QUEUE_TRAVEL_MS * abs(target - from)).roundToInt(),
-                easing = FastOutSlowInEasing,
-            ),
+            // Spring, not tween: the sheet chases the finger's release with a
+            // soft overshoot instead of a fixed-duration glide.
+            animationSpec = MotionTokens.SettleSpring,
         ) { value, _ -> queueSlide.floatValue = value }
     }
 
@@ -1667,7 +1648,7 @@ fun NowPlayingScreen(
     var swipeOffset by remember { mutableFloatStateOf(0f) }
     val swipeSettle by animateFloatAsState(
         targetValue = swipeOffset,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        animationSpec = MotionTokens.SettleSpring,
         label = "swipeOffset",
     )
 
@@ -1794,7 +1775,7 @@ fun NowPlayingScreen(
     // read as a stutter rather than as either. One animation, both surfaces.
     val p by animateFloatAsState(
         targetValue = if (lyricsOpen || queueOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        animationSpec = MotionTokens.SettleSpring,
         label = "sleeveCollapse",
     )
 
@@ -1982,7 +1963,7 @@ fun NowPlayingScreen(
         targetValue = if (
             heroMode && (canvasRendered || artLoaded || heroSettled)
         ) 1f else 0f,
-        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        animationSpec = MotionTokens.SettleSpring,
         label = "heroCanvas",
     )
 
@@ -2043,7 +2024,7 @@ fun NowPlayingScreen(
     // this pair at all but the header, worked out from the state instead — see
     // the gesture below. The two edges do travel with the sleeve as it collapses,
     // which reads like the band could simply follow them the whole way, and that
-    // is exactly what went wrong: the sleeve takes [QUEUE_TRAVEL_MS] to get
+    // is exactly what went wrong: the sleeve takes its settle spring to get
     // there, and for that whole half second the queue was already listed and
     // scrollable underneath a band still lying across it. A drag on a row came
     // out as the player closing.
@@ -2175,7 +2156,7 @@ fun NowPlayingScreen(
     val wideSplitOpen = (lyricsOpen || queueOpen) && wideSplitAvailable
     val wideSplit by animateFloatAsState(
         targetValue = if (wideSplitOpen) 1f else 0f,
-        animationSpec = tween(WIDE_SPLIT_MS, easing = FastOutSlowInEasing),
+        animationSpec = MotionTokens.SettleSpring,
         label = "wideSplit",
     )
     // Which panel the right column is showing. Latched rather than derived, so
@@ -2703,7 +2684,7 @@ fun NowPlayingScreen(
                     //
                     // The header is worked out from the state rather than read
                     // off the sleeve, which is the whole point of doing it here:
-                    // the sleeve is still on its way for [QUEUE_TRAVEL_MS] after
+                    // the sleeve is still on its way for its settle spring after
                     // the queue opens, and a hole that waited for it spent that
                     // half second lying across a list the finger was already
                     // scrolling.
@@ -3374,7 +3355,7 @@ fun NowPlayingScreen(
                     val translateShown = lyricsControlsOpen
                     val translateFade by animateFloatAsState(
                         targetValue = if (translateShown) 1f else 0f,
-                        animationSpec = tween(if (translateShown) 220 else 160),
+                        animationSpec = MotionTokens.FadeMed,
                         label = "translateFade",
                     )
                     if (translateFade > 0.01f) {
@@ -3474,8 +3455,8 @@ fun NowPlayingScreen(
                     // content's own size and the footprint can still grow.
                     .onSizeChanged { if (it.height > controlsFootprint) controlsFootprint = it.height },
                 // Fade at the final position; never animate the controls' height.
-                enter = fadeIn(tween(220)),
-                exit = fadeOut(tween(160)),
+                enter = fadeIn(MotionTokens.FadeMed),
+                exit = fadeOut(MotionTokens.FadeFast),
             ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Column(
@@ -3820,11 +3801,11 @@ fun NowPlayingScreen(
                 AnimatedContent(
                     targetState = queueOpen,
                     transitionSpec = {
-                        (fadeIn(tween(180, delayMillis = 140)) togetherWith fadeOut(tween(140)))
+                        (fadeIn(tween(180, delayMillis = 140, easing = FastOutSlowInEasing)) togetherWith fadeOut(tween(140, easing = FastOutSlowInEasing)))
                             // Unclipped: the capsule's own rounded ends are what
                             // the eye follows through the width change, and the
                             // default clip cuts them square while it happens.
-                            .using(SizeTransform(clip = false) { _, _ -> tween(220) })
+                            .using(SizeTransform(clip = false) { _, _ -> tween(220, easing = FastOutSlowInEasing) })
                     },
                     label = "playerBottomPill",
                 ) { showQueueModes ->
@@ -4359,10 +4340,10 @@ private fun WidePlayerControls(
                     AnimatedContent(
                         targetState = queueOpen,
                         transitionSpec = {
-                            (fadeIn(tween(180, delayMillis = 140)) togetherWith fadeOut(tween(140)))
+                            (fadeIn(tween(180, delayMillis = 140, easing = FastOutSlowInEasing)) togetherWith fadeOut(tween(140, easing = FastOutSlowInEasing)))
                                 // Unclipped: the capsule's own rounded ends are
                                 // what the eye follows through the width change.
-                                .using(SizeTransform(clip = false) { _, _ -> tween(220) })
+                                .using(SizeTransform(clip = false) { _, _ -> tween(220, easing = FastOutSlowInEasing) })
                         },
                         label = "widePlayerBottomPill",
                     ) { showQueueModes ->
@@ -4586,7 +4567,7 @@ private fun WidePlayerControls(
                     AnimatedContent(
                         targetState = showQueue,
                         transitionSpec = {
-                            fadeIn(tween(200, delayMillis = 90)) togetherWith fadeOut(tween(140))
+                            fadeIn(tween(200, delayMillis = 90, easing = FastOutSlowInEasing)) togetherWith fadeOut(tween(140, easing = FastOutSlowInEasing))
                         },
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         label = "widePanel",
@@ -5306,6 +5287,7 @@ private fun TranslationToggleButton(
     }
     val discAlpha by animateFloatAsState(
         targetValue = if (active) 0.34f else 0.18f,
+        animationSpec = MotionTokens.FadeFast,
         label = "translateDisc",
     )
     Box(
@@ -5356,6 +5338,7 @@ private fun RomanizationToggleButton(
     }
     val discAlpha by animateFloatAsState(
         targetValue = if (active) 0.34f else 0.18f,
+        animationSpec = MotionTokens.FadeFast,
         label = "romanizeDisc",
     )
     Box(
@@ -5978,8 +5961,8 @@ private fun LyricsPanel(
                         isActive -> 1f
                         else -> INACTIVE_SCALE
                     },
-                    animationSpec = tween(
-                        durationMillis = if (pressed) 120 else LYRIC_SETTLE_MS,
+                    animationSpec = if (pressed) MotionTokens.PressSpring else tween(
+                        durationMillis = LYRIC_SETTLE_MS,
                         easing = LYRIC_EASING,
                     ),
                     label = "lyricScale",
@@ -5989,7 +5972,7 @@ private fun LyricsPanel(
                 // light going down as the next one's comes up.
                 val glow by animateFloatAsState(
                     targetValue = if (isActive && glowing) GLOW_ALPHA else 0f,
-                    animationSpec = tween(durationMillis = 420),
+                    animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
                     label = "lyricGlow",
                 )
                 // No width held back for the swell any more: nothing draws past
@@ -6156,6 +6139,7 @@ private fun PanelVoice(
         // tail instead lets a finished line close up as it dims away.
         val tail by animateFloatAsState(
             targetValue = if (sung) 1f else UNSUNG_ALPHA,
+            animationSpec = tween(durationMillis = LYRIC_SETTLE_MS, easing = LYRIC_EASING),
             label = "lyricTail",
         )
         SweptLyricLine(
@@ -6177,6 +6161,7 @@ private fun PanelVoice(
         // are not browsing; the active line stays at full brightness.
         val tail by animateFloatAsState(
             targetValue = if (sung) 1f else UNSUNG_ALPHA,
+            animationSpec = tween(durationMillis = LYRIC_SETTLE_MS, easing = LYRIC_EASING),
             label = "lyricTail",
         )
         SweptLyricLine(
@@ -6202,6 +6187,7 @@ private fun PanelVoice(
         // the words. Lyrics with no timing at all are all "now", and stay lit.
         val lit by animateFloatAsState(
             targetValue = if (!synced || sung || isActive) 1f else UNSUNG_ALPHA,
+            animationSpec = tween(durationMillis = LYRIC_SETTLE_MS, easing = LYRIC_EASING),
             label = "lyricLit",
         )
         var layout by remember(line.text) { mutableStateOf<TextLayoutResult?>(null) }
@@ -6406,7 +6392,7 @@ private fun LyricsUnavailableLine(trackKey: Any, modifier: Modifier = Modifier) 
     }
     val alpha by animateFloatAsState(
         targetValue = if (visible) 0.55f else 0f,
-        animationSpec = tween(durationMillis = LYRICS_UNAVAILABLE_FADE_MS),
+        animationSpec = MotionTokens.FadeMed,
         label = "lyricsUnavailableAlpha",
     )
     Text(
@@ -6546,6 +6532,7 @@ private fun CircleGlyph(
     val haptics = rememberHaptics()
     val discAlpha by animateFloatAsState(
         targetValue = if (active) 0.34f else 0.18f,
+        animationSpec = MotionTokens.FadeFast,
         label = "glyphDisc",
     )
     Box(
@@ -6564,7 +6551,7 @@ private fun CircleGlyph(
     ) {
         Crossfade(
             targetState = icon,
-            animationSpec = tween(durationMillis = 180),
+            animationSpec = MotionTokens.FadeFast,
             label = "playerMenuGlyph",
         ) { glyph ->
             Icon(
@@ -6596,6 +6583,7 @@ private fun TransportGlyph(
     // Faded rather than hidden: the row keeps its shape at the ends of a queue.
     val alpha by animateFloatAsState(
         targetValue = if (enabled) 1f else 0.3f,
+        animationSpec = MotionTokens.FadeFast,
         label = "transportAlpha",
     )
     Box(

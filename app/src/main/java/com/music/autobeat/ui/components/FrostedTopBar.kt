@@ -5,11 +5,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -77,6 +74,7 @@ import com.music.autobeat.BuildConfig
 import com.music.autobeat.R
 import com.music.autobeat.data.model.Account
 import com.music.autobeat.data.settings.AppSettings
+import com.music.autobeat.ui.theme.MotionTokens
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
@@ -357,10 +355,8 @@ private fun ArtworkPageActions(
             // left. The surface itself therefore grows instead of jumping to
             // its new width in a single frame.
             .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
+                // Restrained bounce: the pill breathes as actions come and go.
+                animationSpec = MotionTokens.SettleSpring,
             )
             // One 44dp profile target with no inset is a true 44x44 circle,
             // matching the logo and back ends. Once another action exists,
@@ -476,7 +472,8 @@ fun TopBarAccountButton(
                             if (kotlin.math.abs(drag) < 28f) return@detectVerticalDragGestures
                             if (!onSwipeProfile.invoke(drag > 0f)) scope.launch {
                                 translation.snapTo(if (drag > 0f) 9f else -9f)
-                                translation.animateTo(0f, spring())
+                                // Springy snap-back: the avatar overshoots home.
+                                translation.animateTo(0f, MotionTokens.SettleSpring)
                             }
                         },
                     )

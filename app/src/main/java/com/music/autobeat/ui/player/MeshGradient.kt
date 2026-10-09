@@ -40,6 +40,7 @@ import coil3.toBitmap
 import com.music.autobeat.data.model.PLAYER_ART_PX
 import com.music.autobeat.data.model.artworkAt
 import com.music.autobeat.data.settings.AppSettings
+import com.music.autobeat.ui.theme.MotionTokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -115,7 +116,9 @@ fun MeshGradientBackground(
 
     // Each colour slot crossfades independently when the track (palette) changes,
     // unless "reduce animation" is on, in which case colours snap straight to target.
-    val colorSpec: AnimationSpec<Color> = if (reduceAnimation || !animated) snap() else tween(1400)
+    val colorSpec: AnimationSpec<Color> =
+        // Slow crossfade, not a snap: the backdrop breathes between palettes.
+        if (reduceAnimation || !animated) snap() else tween(1400, easing = FastOutSlowInEasing)
     val animatedColors = tuned.mapIndexed { index, color ->
         animateColorAsState(color, colorSpec, label = "meshColor$index").value
     }
