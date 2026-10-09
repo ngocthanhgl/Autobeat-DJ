@@ -6211,7 +6211,7 @@ private fun LyricsPanel(
                     }
                 }
             }
-        }
+    )
         if (browsing && !activeOnScreen) {
             // A visible way back to the song. The resume used to be two
             // invisible timers, and a reader who had scrolled on had no idea
